@@ -1,0 +1,14 @@
+# Claude private instructions and local settings
+CLAUDE.local.md
+.claude/
+
+# Claude image paste screenshots
+.claude-images/
+
+# Node dependencies
+node_modules/
+tests/node_modules/
+
+# OS
+.DS_Store
+Thumbs.db

@@ -1,0 +1,12 @@
+{
+  "name": "quick-translate-tests",
+  "version": "1.0.0",
+  "description": "Playwright tests for Quick Google Translate extension",
+  "scripts": {
+    "test": "node test.js",
+    "install-playwright": "npx playwright install chromium"
+  },
+  "dependencies": {
+    "playwright": "^1.44.0"
+  }
+}
