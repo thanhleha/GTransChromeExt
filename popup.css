@@ -189,6 +189,60 @@ body {
   border-radius: 3px;
 }
 
+/* Favorites section */
+.fav-buttons {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.fav-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 14px;
+  border-radius: 20px;
+  border: 1.5px solid #fbbc04;
+  background: #fff;
+  color: #202124;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s;
+  white-space: nowrap;
+}
+
+.fav-btn:hover {
+  background: #fef7e0;
+}
+
+.fav-btn:active {
+  background: #fde293;
+}
+
+/* Star button inside language list items */
+.star-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 2px 4px;
+  font-size: 15px;
+  line-height: 1;
+  color: #dadce0;
+  border-radius: 4px;
+  transition: color 0.1s, background 0.1s;
+  flex-shrink: 0;
+}
+
+.star-btn.pinned {
+  color: #fbbc04;
+}
+
+.star-btn:hover {
+  color: #fbbc04;
+  background: #fef7e0;
+}
+
 .lang-item {
   display: flex;
   align-items: center;
