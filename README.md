@@ -22,7 +22,8 @@ Chrome has a built-in translation feature, so this is a fair question.
 - Pin permanent favorites — languages you always need stay pinned above the recents.
 - Consistent "Show original" button — always accessible from the toolbar, regardless of what the page itself renders.
 - Works on any page — no reliance on Chrome's auto-detect heuristics; you choose when to translate and to what language.
-- Hover any word to see the original — on translated pages, hover a word for 1 second and a small tooltip shows the original word in the source language.
+- Hover or select a word to see the original — on translated pages, choose a trigger mode (Hover for 1 s, or Select text) and a small tooltip shows the original word in the source language.
+- Clean reading experience — Google Translate's intrusive "Original text" popup and its blue paragraph-wide hover highlight are suppressed by default (toggle in the popup if you want them back).
 
 If you only ever translate everything to one language and Chrome's banner works reliably for you, the built-in is fine. If you work across multiple languages daily, this extension removes the friction.
 
@@ -32,7 +33,8 @@ If you only ever translate everything to one language and Chrome's banner works 
 - **Pinned favorites** — star any language to keep it permanently above the recent list
 - **Full language search** — searchable list of ~100 languages
 - **Show original** — one-click button to return to the untranslated page, always visible from the toolbar
-- **Hover-to-show-original** — on translated pages, hover any word for 1 second to see a tooltip with the original word; toggle on/off in the popup
+- **Reveal original word/phrase** — on translated pages, pick a trigger in the popup (mutually exclusive): **Hover** a word for 1 s, or **Select** text with mouse/keyboard; a small tooltip shows the original text in the source language
+- **Suppress Google Translate's UI clutter** — hides the "Original text" bubble and the blue paragraph-wide hover highlight that GT injects on `.translate.goog` pages; toggle in the popup
 - **No double-wrapping** — detects when you're already on a translated page and re-wraps the original URL cleanly
 - **Handles modern Google Translate URLs** — works with both `translate.google.com` and `.translate.goog` domain formats
 - **No API key needed** — uses Google Translate's public URL interface
@@ -73,10 +75,11 @@ When you pull new code or edit any file locally, Chrome won't pick up the change
 GTransChromeExt/
 ├── manifest.json          # MV3 manifest
 ├── background.js          # Service worker — initializes defaults on install
+├── content.js             # Injected on .translate.goog pages: hover/select tooltip, GT UI suppression
 ├── languages.js           # Full language list (~100 languages)
 ├── popup.html             # Extension popup UI
 ├── popup.css              # Google-style popup styling
-├── popup.js               # Popup logic (recent langs, favorites, translate, search)
+├── popup.js               # Popup logic (recent langs, favorites, translate, search, settings)
 ├── generate_icons.py      # Pure-Python icon generator (no external deps)
 ├── icons/
 │   ├── icon16.png
@@ -84,7 +87,7 @@ GTransChromeExt/
 │   └── icon128.png
 └── tests/
     ├── package.json
-    └── test.js            # Playwright end-to-end tests (7 tests)
+    └── test.js            # Playwright end-to-end test suite
 ```
 
 ## Running Tests
@@ -108,6 +111,11 @@ node test.js
 5. Choosing a new language promotes it to the top of the recent list
 6. "Show original" bar appears when on a translated page
 7. Pin/unpin a language adds and removes it from the favorites section
+8. Hover over a word on a translated page shows tooltip + highlight above the paragraph
+9. Google Translate's injected popup elements are suppressed
+9b. GT paragraph hover decoration (background + left-edge border) is cleared inline
+9c. GT's signature light-blue background is cleared via color detection even without a GT class
+10. Select-text mode shows tooltip for selected text after 1 s of stable selection
 
 ## Regenerating Icons
 
