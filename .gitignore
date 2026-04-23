@@ -9,6 +9,9 @@ CLAUDE.local.md
 node_modules/
 tests/node_modules/
 
+# Build output (Chrome Web Store upload zip)
+dist/
+
 # OS
 .DS_Store
 Thumbs.db
