@@ -323,6 +323,107 @@ async function runTests() {
     failed++;
   }
 
+  // ─── Test 8: Hover tooltip and highlight on translated page ─────────────
+  console.log('\nTest 8: Hover over word shows tooltip above paragraph with highlight');
+  try {
+    // Intercept the page navigation to return stable test HTML
+    const TEST_ORIGIN = 'https://de-m-wikipedia-org.translate.goog';
+    const TEST_URL = `${TEST_ORIGIN}/wiki/Berlin?_x_tr_sl=de&_x_tr_tl=en&_x_tr_hl=en`;
+
+    await context.route(`${TEST_ORIGIN}/**`, async route => {
+      if (route.request().resourceType() === 'document') {
+        await route.fulfill({
+          status: 200,
+          contentType: 'text/html; charset=utf-8',
+          body: `<!DOCTYPE html>
+<html lang="de">
+<head><meta charset="utf-8"><title>Berlin</title></head>
+<body>
+<div style="height:200px"></div>
+<p id="target">Berlin is the capital and largest city of Germany.</p>
+</body>
+</html>`,
+        });
+      } else {
+        await route.continue().catch(() => {});
+      }
+    });
+
+    // Mock the translate API so any query returns a known word
+    await context.route('https://translate.googleapis.com/**', route => {
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify([[['Hauptstadt', 'capital', null, null]], null, 'en']),
+      });
+    });
+
+    const page = await context.newPage();
+    await page.goto(TEST_URL, { waitUntil: 'domcontentloaded', timeout: 15000 });
+    await page.waitForTimeout(800);
+
+    // Find the viewport position of the word "capital" in the test paragraph
+    const wordPos = await page.evaluate(() => {
+      const para = document.getElementById('target');
+      if (!para || !para.firstChild) return null;
+      const text = para.firstChild.textContent;
+      const idx = text.indexOf('capital');
+      if (idx === -1) return null;
+      const range = document.createRange();
+      range.setStart(para.firstChild, idx);
+      range.setEnd(para.firstChild, idx + 'capital'.length);
+      const r = range.getBoundingClientRect();
+      const pr = para.getBoundingClientRect();
+      return { x: r.left + r.width / 2, y: r.top + r.height / 2, top: r.top, bottom: r.bottom, paraTop: pr.top, paraBottom: pr.bottom };
+    });
+
+    assert(wordPos !== null, 'Test paragraph found and "capital" word located');
+
+    if (wordPos) {
+      // Hover for 1.5 s without moving
+      await page.mouse.move(wordPos.x, wordPos.y);
+      await page.waitForTimeout(1500);
+
+      const markExists = await page.evaluate(() => !!document.getElementById('__qtrans_mark__'));
+      assert(markExists, 'Word highlight overlay (#__qtrans_mark__) appears after 1 s hover');
+
+      const tooltipInfo = await page.evaluate(() => {
+        const el = document.getElementById('__qtrans_hover__');
+        if (!el) return null;
+        const r = el.getBoundingClientRect();
+        return { text: el.textContent.trim(), top: r.top, bottom: r.bottom };
+      });
+      assert(tooltipInfo !== null, 'Tooltip (#__qtrans_hover__) appears after 1 s hover');
+
+      if (tooltipInfo) {
+        assert(
+          tooltipInfo.text.includes('Hauptstadt'),
+          `Tooltip shows mocked original word — got: "${tooltipInfo.text}"`
+        );
+        // Tooltip must not overlap the paragraph — either fully above or fully below
+        const abovePara = tooltipInfo.bottom <= wordPos.paraTop + 2;
+        const belowPara = tooltipInfo.top >= wordPos.paraBottom - 2;
+        assert(
+          abovePara || belowPara,
+          `Tooltip (${Math.round(tooltipInfo.top)}–${Math.round(tooltipInfo.bottom)}px) does not overlap paragraph (${Math.round(wordPos.paraTop)}–${Math.round(wordPos.paraBottom)}px)`
+        );
+      }
+
+      // Move mouse away — both elements should be removed
+      await page.mouse.move(10, 10);
+      await page.waitForTimeout(200);
+      const markGone = await page.evaluate(() => !document.getElementById('__qtrans_mark__'));
+      const tooltipGone = await page.evaluate(() => !document.getElementById('__qtrans_hover__'));
+      assert(markGone, 'Highlight overlay removed when mouse moves away');
+      assert(tooltipGone, 'Tooltip removed when mouse moves away');
+    }
+
+    await page.close();
+  } catch (e) {
+    console.log(`  ${FAIL} Test 8 threw: ${e.message}`);
+    failed++;
+  }
+
   // ─── Summary ─────────────────────────────────────────────────────────────
   console.log(`\n${'─'.repeat(50)}`);
   const total = passed + failed;
