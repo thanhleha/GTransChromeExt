@@ -13,6 +13,7 @@ Chrome has a built-in translation feature, so this is a fair question.
 - **No quick switching between languages.** If you're a researcher, translator, or language learner jumping between three languages throughout the day, Chrome gives you zero help remembering or accelerating that pattern.
 - **Unreliable prompt.** Chrome's "Translate this page?" banner doesn't always appear — it depends on language detection heuristics that can miss mixed-language pages or fail silently.
 - **No "show original" affordance in the toolbar.** Once translated, getting back to the original page requires finding the translate bar inside the page (which can be hidden or scrolled away), not from your toolbar.
+- **No word-level original lookup.** Reading a translated page, you often want to know exactly what word was used in the original — Chrome offers no way to check without opening a separate tab.
 
 **This extension solves those problems directly:**
 
@@ -21,6 +22,7 @@ Chrome has a built-in translation feature, so this is a fair question.
 - Pin permanent favorites — languages you always need stay pinned above the recents.
 - Consistent "Show original" button — always accessible from the toolbar, regardless of what the page itself renders.
 - Works on any page — no reliance on Chrome's auto-detect heuristics; you choose when to translate and to what language.
+- Hover any word to see the original — on translated pages, hover a word for 1 second and a small tooltip shows the original word in the source language.
 
 If you only ever translate everything to one language and Chrome's banner works reliably for you, the built-in is fine. If you work across multiple languages daily, this extension removes the friction.
 
@@ -30,10 +32,11 @@ If you only ever translate everything to one language and Chrome's banner works 
 - **Pinned favorites** — star any language to keep it permanently above the recent list
 - **Full language search** — searchable list of ~100 languages
 - **Show original** — one-click button to return to the untranslated page, always visible from the toolbar
+- **Hover-to-show-original** — on translated pages, hover any word for 1 second to see a tooltip with the original word; toggle on/off in the popup
 - **No double-wrapping** — detects when you're already on a translated page and re-wraps the original URL cleanly
 - **Handles modern Google Translate URLs** — works with both `translate.google.com` and `.translate.goog` domain formats
 - **No API key needed** — uses Google Translate's public URL interface
-- **Synced across devices** — recents and favorites stored via `chrome.storage.sync`
+- **Synced across devices** — recents, favorites, and settings stored via `chrome.storage.sync`
 
 ## How it works
 
@@ -118,8 +121,9 @@ python generate_icons.py
 
 | Permission | Reason |
 |---|---|
-| `storage` | Save and sync recent languages and favorites across devices |
+| `storage` | Save and sync recent languages, favorites, and settings across devices |
 | `tabs` | Read the current tab's URL to build the translate link |
+| `translate.googleapis.com` (host) | Reverse-translate hovered words to their original form on translated pages |
 
 ## Potential Future Improvements
 

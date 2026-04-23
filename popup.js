@@ -252,6 +252,14 @@ async function init() {
     renderLanguageList(searchInput.value, currentPinned);
   });
   searchInput.focus();
+
+  const toggle = document.getElementById('hoverOriginalToggle');
+  chrome.storage.sync.get(['hoverOriginalEnabled'], result => {
+    toggle.checked = result.hoverOriginalEnabled !== false;
+  });
+  toggle.addEventListener('change', () => {
+    chrome.storage.sync.set({ hoverOriginalEnabled: toggle.checked });
+  });
 }
 
 document.addEventListener('DOMContentLoaded', init);

@@ -1,9 +1,17 @@
 {
   "manifest_version": 3,
   "name": "Quick Google Translate",
-  "version": "1.0.0",
-  "description": "One-click translation to your 3 most recently used languages. Pin favorite languages, and restore the original page with one tap.",
+  "version": "1.1.0",
+  "description": "One-click translation to your 3 most recently used languages. Hover any word to see the original. Pin favorites, restore the original page in one tap.",
   "permissions": ["storage", "tabs"],
+  "host_permissions": ["https://translate.googleapis.com/*"],
+  "content_scripts": [
+    {
+      "matches": ["*://*.translate.goog/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
   "action": {
     "default_popup": "popup.html",
     "default_title": "Quick Translate",

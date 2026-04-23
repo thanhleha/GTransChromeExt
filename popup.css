@@ -284,3 +284,66 @@ body {
   color: #9aa0a6;
   font-size: 13px;
 }
+
+/* Settings section */
+.settings-section {
+  padding: 8px 16px 10px;
+}
+
+.setting-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+  user-select: none;
+}
+
+.setting-label {
+  font-size: 12px;
+  color: #5f6368;
+}
+
+/* Toggle switch */
+.toggle-wrap {
+  position: relative;
+  width: 32px;
+  height: 18px;
+  flex-shrink: 0;
+}
+
+.toggle-wrap input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+  position: absolute;
+}
+
+.toggle-track {
+  position: absolute;
+  inset: 0;
+  background: #dadce0;
+  border-radius: 9px;
+  transition: background 0.2s;
+  cursor: pointer;
+}
+
+.toggle-track::after {
+  content: '';
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  background: #fff;
+  border-radius: 50%;
+  top: 3px;
+  left: 3px;
+  transition: transform 0.2s;
+  box-shadow: 0 1px 3px rgba(0,0,0,.2);
+}
+
+.toggle-wrap input:checked + .toggle-track {
+  background: #4285F4;
+}
+
+.toggle-wrap input:checked + .toggle-track::after {
+  transform: translateX(14px);
+}

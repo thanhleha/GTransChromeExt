@@ -1,7 +1,8 @@
 chrome.runtime.onInstalled.addListener(() => {
-  chrome.storage.sync.get(['recentLanguages'], (result) => {
-    if (!result.recentLanguages) {
-      chrome.storage.sync.set({ recentLanguages: ['vi', 'en', 'fr'] });
-    }
+  chrome.storage.sync.get(['recentLanguages', 'hoverOriginalEnabled'], (result) => {
+    const updates = {};
+    if (!result.recentLanguages) updates.recentLanguages = ['vi', 'en', 'fr'];
+    if (result.hoverOriginalEnabled === undefined) updates.hoverOriginalEnabled = true;
+    if (Object.keys(updates).length) chrome.storage.sync.set(updates);
   });
 });
