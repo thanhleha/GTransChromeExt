@@ -1,83 +1,145 @@
 (function () {
   'use strict';
 
-  let hoverTimer = null;
-  let enabled = true;
-  let resolvedSourceLang = null;   // cached after first successful detection
-  let sourceLangPending = null;    // in-flight promise so we don't double-fetch
+  // ─── Settings ─────────────────────────────────────────────────────────────
+  let hoverEnabled = true;
+  let selectionEnabled = false;
+  let hideGTPopup = true;
+  let resolvedSourceLang = null;
+  let sourceLangPending = null;
 
-  chrome.storage.sync.get(['hoverOriginalEnabled'], result => {
-    enabled = result.hoverOriginalEnabled !== false;
-  });
-
-  chrome.storage.onChanged.addListener(changes => {
-    if ('hoverOriginalEnabled' in changes) {
-      enabled = changes.hoverOriginalEnabled.newValue !== false;
+  function applySettings(s) {
+    hoverEnabled = s.hoverOriginalEnabled !== false;
+    selectionEnabled = s.selectionOriginalEnabled === true;
+    const nextHide = s.hideGTPopup !== false;
+    if (nextHide !== hideGTPopup || !gtObserver) {
+      hideGTPopup = nextHide;
+      hideGTPopup ? startGTSuppression() : stopGTSuppression();
     }
-  });
-
-  function getPageLangs() {
-    const params = new URLSearchParams(window.location.search);
-    return {
-      sourceLang: params.get('_x_tr_sl') || 'auto',
-      targetLang: params.get('_x_tr_tl') || 'auto',
-    };
   }
 
-  // Try every reasonable metadata source for the original page language.
-  // Falls back to an API call against untranslated text snippets in the DOM.
+  chrome.storage.sync.get(
+    ['hoverOriginalEnabled', 'selectionOriginalEnabled', 'hideGTPopup'],
+    result => applySettings(result)
+  );
+
+  chrome.storage.onChanged.addListener(changes => {
+    const next = {
+      hoverOriginalEnabled: hoverEnabled,
+      selectionOriginalEnabled: selectionEnabled,
+      hideGTPopup,
+    };
+    if ('hoverOriginalEnabled' in changes) next.hoverOriginalEnabled = changes.hoverOriginalEnabled.newValue;
+    if ('selectionOriginalEnabled' in changes) next.selectionOriginalEnabled = changes.selectionOriginalEnabled.newValue;
+    if ('hideGTPopup' in changes) next.hideGTPopup = changes.hideGTPopup.newValue;
+    applySettings(next);
+  });
+
+  // ─── GT Popup Suppression ─────────────────────────────────────────────────
+  // Hides the "Original text" popup that Google Translate injects on
+  // .translate.goog pages when you hover/click translated text.
+
+  const GT_SEL = [
+    '.gt-baf-container',
+    '[class*="gt-baf"]',
+    '.goog-te-bubble',
+    '.goog-tooltip',
+    '#goog-gt-tt',
+  ].join(',');
+
+  let gtObserver = null;
+
+  function suppressEl(el) {
+    el.style.setProperty('display', 'none', 'important');
+    el.style.setProperty('pointer-events', 'none', 'important');
+  }
+
+  function isGTPopupNode(node) {
+    if (node.nodeType !== Node.ELEMENT_NODE) return false;
+    const c = (node.getAttribute('class') || '') + ' ' + (node.getAttribute('id') || '');
+    return /gt-baf|goog-te-bubble|goog-tooltip|goog-gt-tt/i.test(c);
+  }
+
+  function startGTSuppression() {
+    if (gtObserver) return;
+    // Hide any already-present GT popups.
+    document.querySelectorAll(GT_SEL).forEach(suppressEl);
+
+    gtObserver = new MutationObserver(mutations => {
+      for (const mut of mutations) {
+        for (const node of mut.addedNodes) {
+          if (isGTPopupNode(node)) suppressEl(node);
+          node.querySelectorAll?.(GT_SEL).forEach(suppressEl);
+        }
+        // Catch GT popups made visible via inline style change.
+        if (mut.type === 'attributes' && isGTPopupNode(mut.target)) {
+          suppressEl(mut.target);
+        }
+      }
+    });
+
+    gtObserver.observe(document.documentElement, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['style', 'class'],
+    });
+  }
+
+  function stopGTSuppression() {
+    gtObserver?.disconnect();
+    gtObserver = null;
+  }
+
+  // ─── Language detection ───────────────────────────────────────────────────
+
+  function getPageLangs() {
+    const p = new URLSearchParams(window.location.search);
+    return { sourceLang: p.get('_x_tr_sl') || 'auto', targetLang: p.get('_x_tr_tl') || 'auto' };
+  }
+
   async function resolveSourceLanguage(targetLang) {
     if (resolvedSourceLang) return resolvedSourceLang;
     if (sourceLangPending) return sourceLangPending;
 
     sourceLangPending = (async () => {
-      const check = code => {
-        const c = (code || '').split(/[-_]/)[0].toLowerCase();
+      const ck = raw => {
+        const c = (raw || '').split(/[-_]/)[0].toLowerCase();
         return c && c !== targetLang ? c : null;
       };
 
-      // 1. _x_tr_sl URL param (already handled by caller but double-check)
       const slParam = new URLSearchParams(window.location.search).get('_x_tr_sl');
       if (slParam && slParam !== 'auto') return (resolvedSourceLang = slParam);
 
-      // 2. <html lang>
-      let lang = check(document.documentElement.getAttribute('lang'));
+      let lang;
+      lang = ck(document.documentElement.getAttribute('lang'));
       if (lang) return (resolvedSourceLang = lang);
 
-      // 3. og:locale
-      lang = check(document.querySelector('meta[property="og:locale"]')?.getAttribute('content'));
+      lang = ck(document.querySelector('meta[property="og:locale"]')?.getAttribute('content'));
       if (lang) return (resolvedSourceLang = lang);
 
-      // 4. http-equiv content-language
-      lang = check(document.querySelector('meta[http-equiv="content-language"]')?.getAttribute('content'));
+      lang = ck(document.querySelector('meta[http-equiv="content-language"]')?.getAttribute('content'));
       if (lang) return (resolvedSourceLang = lang);
 
-      // 5. hreflang links (skip x-default)
       for (const link of document.querySelectorAll('link[hreflang]')) {
-        lang = check(link.getAttribute('hreflang'));
+        lang = ck(link.getAttribute('hreflang'));
         if (lang) return (resolvedSourceLang = lang);
       }
 
-      // 6. API-based detection using untranslated text (notranslate / code blocks)
-      //    These elements are left in the original language by Google Translate.
+      // API-based detection: use text that GT leaves untranslated (code/notranslate).
       const samples = [];
-      document.querySelectorAll(
-        '.notranslate, [translate="no"], code, pre, [class*="code"]'
-      ).forEach(el => {
-        const t = (el.textContent || '').trim();
-        // Only plain text that has letters (skip numbers-only / symbols-only)
-        if (t.length >= 4 && /[a-zA-Z]{3}/.test(t)) samples.push(t.slice(0, 40));
-      });
+      document.querySelectorAll('.notranslate,[translate="no"],code,pre,[class*="code"]')
+        .forEach(el => {
+          const t = (el.textContent || '').trim();
+          if (t.length >= 4 && /[a-zA-Z]{3}/.test(t)) samples.push(t.slice(0, 40));
+        });
 
       for (const sample of samples.slice(0, 3)) {
         try {
-          const url =
-            `https://translate.googleapis.com/translate_a/single` +
-            `?client=gtx&sl=auto&tl=${encodeURIComponent(targetLang)}&dt=t` +
-            `&q=${encodeURIComponent(sample)}`;
-          const resp = await fetch(url);
-          const data = await resp.json();
-          lang = check(data?.[2]);
+          const url = `https://translate.googleapis.com/translate_a/single` +
+            `?client=gtx&sl=auto&tl=${encodeURIComponent(targetLang)}&dt=t&q=${encodeURIComponent(sample)}`;
+          const data = await (await fetch(url)).json();
+          lang = ck(data?.[2]);
           if (lang) return (resolvedSourceLang = lang);
         } catch (_) {}
       }
@@ -88,7 +150,8 @@
     return sourceLangPending;
   }
 
-  // Returns the word under (x,y), its Range, and its bounding rect.
+  // ─── Word / text utilities ────────────────────────────────────────────────
+
   function getWordInfoAtPoint(x, y) {
     const caret = document.caretRangeFromPoint(x, y);
     if (!caret || caret.startContainer.nodeType !== Node.TEXT_NODE) return null;
@@ -108,27 +171,31 @@
     const range = document.createRange();
     range.setStart(node, start);
     range.setEnd(node, end);
-
     return { word, range, rect: range.getBoundingClientRect() };
   }
 
-  async function fetchOriginalWord(word, readingLang, originalLang) {
-    const url =
-      `https://translate.googleapis.com/translate_a/single` +
+  // ─── Translation API ──────────────────────────────────────────────────────
+
+  async function fetchOriginalText(text, readingLang, originalLang) {
+    const url = `https://translate.googleapis.com/translate_a/single` +
       `?client=gtx&sl=${encodeURIComponent(readingLang)}&tl=${encodeURIComponent(originalLang)}` +
-      `&dt=t&q=${encodeURIComponent(word)}`;
+      `&dt=t&q=${encodeURIComponent(text)}`;
 
     const resp = await fetch(url);
     if (!resp.ok) return null;
-
     const data = await resp.json();
-    const translated = data?.[0]?.[0]?.[0];
-    if (!translated || translated.toLowerCase() === word.toLowerCase()) return null;
+
+    // Concatenate all translated segments in case the text spans multiple chunks.
+    const segments = data?.[0];
+    if (!segments) return null;
+    const translated = segments.map(s => s?.[0] || '').join('').trim();
+    if (!translated || translated.toLowerCase() === text.toLowerCase()) return null;
     return translated;
   }
 
-  // Overlay drawn at the word rect — no DOM modification, works on GT's nested <font> markup.
-  function addPageHighlight(wordRect) {
+  // ─── Overlay highlight ────────────────────────────────────────────────────
+
+  function addPageHighlight(rect) {
     removePageHighlight();
     const el = document.createElement('div');
     el.id = '__qtrans_mark__';
@@ -136,10 +203,10 @@
       'all:initial',
       'position:fixed',
       'z-index:2147483646',
-      `left:${Math.round(wordRect.left - 2)}px`,
-      `top:${Math.round(wordRect.top - 1)}px`,
-      `width:${Math.round(wordRect.width + 4)}px`,
-      `height:${Math.round(wordRect.height + 2)}px`,
+      `left:${Math.round(rect.left - 2)}px`,
+      `top:${Math.round(rect.top - 1)}px`,
+      `width:${Math.round(rect.width + 4)}px`,
+      `height:${Math.round(rect.height + 2)}px`,
       'background:rgba(254,240,138,0.7)',
       'border-radius:3px',
       'pointer-events:none',
@@ -151,10 +218,9 @@
     document.getElementById('__qtrans_mark__')?.remove();
   }
 
-  // Tooltip anchored just above the hovered word's line.
-  // If no room above (near viewport top), flips just below the word instead.
-  // This avoids the "block ancestor is too tall → tooltip lands at page bottom" bug.
-  function createTooltip(wordRect, originalWord, langCode) {
+  // ─── Tooltip ──────────────────────────────────────────────────────────────
+
+  function createTooltip(anchorRect, originalText, langCode) {
     removeTooltipEl();
 
     const el = document.createElement('div');
@@ -169,7 +235,7 @@
       'padding:5px 10px 6px',
       'font:400 13px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif',
       'pointer-events:none',
-      'max-width:260px',
+      'max-width:280px',
       'word-break:break-word',
       'box-shadow:0 2px 10px rgba(0,0,0,.4)',
       'opacity:0',
@@ -182,7 +248,7 @@
 
     const wordEl = document.createElement('div');
     wordEl.style.cssText = 'font-weight:600;font-size:14px;';
-    wordEl.textContent = originalWord;
+    wordEl.textContent = originalText;
 
     el.append(label, wordEl);
     document.documentElement.appendChild(el);
@@ -192,13 +258,11 @@
       const th = el.offsetHeight;
       const GAP = 6;
 
-      // Center horizontally on the word.
-      let left = wordRect.left + wordRect.width / 2 - tw / 2;
+      let left = anchorRect.left + anchorRect.width / 2 - tw / 2;
       left = Math.max(8, Math.min(left, window.innerWidth - tw - 8));
 
-      // Place above the word's top edge; flip below if too close to viewport top.
-      let top = wordRect.top - th - GAP;
-      if (top < 8) top = wordRect.bottom + GAP;
+      let top = anchorRect.top - th - GAP;
+      if (top < 8) top = anchorRect.bottom + GAP;
 
       el.style.left = left + 'px';
       el.style.top = top + 'px';
@@ -210,13 +274,20 @@
     document.getElementById('__qtrans_hover__')?.remove();
   }
 
+  // ─── Shared cleanup ───────────────────────────────────────────────────────
+
   function removeAll() {
     clearTimeout(hoverTimer);
+    clearTimeout(selectionTimer);
     hoverTimer = null;
+    selectionTimer = null;
     removeTooltipEl();
     removePageHighlight();
   }
 
+  // ─── Hover mode ───────────────────────────────────────────────────────────
+
+  let hoverTimer = null;
   let lastX = 0;
   let lastY = 0;
 
@@ -225,10 +296,11 @@
     lastY = e.clientY;
 
     clearTimeout(hoverTimer);
+    hoverTimer = null;
     removeTooltipEl();
     removePageHighlight();
 
-    if (!enabled) return;
+    if (!hoverEnabled) return;
 
     hoverTimer = setTimeout(async () => {
       const info = getWordInfoAtPoint(lastX, lastY);
@@ -236,16 +308,14 @@
 
       let { sourceLang, targetLang } = getPageLangs();
       if (targetLang === 'auto') return;
-
       if (sourceLang === 'auto') {
         sourceLang = await resolveSourceLanguage(targetLang);
         if (!sourceLang) return;
       }
-
       if (sourceLang === targetLang) return;
 
       try {
-        const original = await fetchOriginalWord(info.word, targetLang, sourceLang);
+        const original = await fetchOriginalText(info.word, targetLang, sourceLang);
         if (original) {
           addPageHighlight(info.rect);
           createTooltip(info.rect, original, sourceLang);
@@ -254,7 +324,57 @@
     }, 1000);
   }, { passive: true });
 
+  // ─── Selection mode ───────────────────────────────────────────────────────
+  // Triggers on any text selection (double-click, drag, keyboard Shift+arrows).
+  // After 1 s of stable selection, translates the selected text back to original.
+
+  let selectionTimer = null;
+
+  document.addEventListener('selectionchange', () => {
+    clearTimeout(selectionTimer);
+    selectionTimer = null;
+
+    if (!selectionEnabled) return;
+
+    const sel = window.getSelection();
+    const text = (sel?.toString() || '').trim();
+    if (!text || text.length < 2) {
+      removeTooltipEl();
+      removePageHighlight();
+      return;
+    }
+
+    selectionTimer = setTimeout(async () => {
+      const sel = window.getSelection();
+      if (!sel?.rangeCount) return;
+      const text = sel.toString().trim();
+      if (!text || text.length < 2) return;
+
+      const rect = sel.getRangeAt(0).getBoundingClientRect();
+      if (!rect.width && !rect.height) return;
+
+      let { sourceLang, targetLang } = getPageLangs();
+      if (targetLang === 'auto') return;
+      if (sourceLang === 'auto') {
+        sourceLang = await resolveSourceLanguage(targetLang);
+        if (!sourceLang) return;
+      }
+      if (sourceLang === targetLang) return;
+
+      try {
+        const original = await fetchOriginalText(text, targetLang, sourceLang);
+        if (original) {
+          // No custom highlight overlay for selections — browser highlight is sufficient.
+          createTooltip(rect, original, sourceLang);
+        }
+      } catch (_) {}
+    }, 1000);
+  });
+
   document.addEventListener('mouseleave', removeAll);
   document.addEventListener('scroll', removeAll, { passive: true, capture: true });
-  document.addEventListener('keydown', removeAll);
+  document.addEventListener('keydown', e => {
+    // Don't cancel on Shift (used for keyboard text selection).
+    if (!e.shiftKey) removeAll();
+  });
 })();

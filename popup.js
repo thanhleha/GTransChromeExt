@@ -253,12 +253,18 @@ async function init() {
   });
   searchInput.focus();
 
-  const toggle = document.getElementById('hoverOriginalToggle');
-  chrome.storage.sync.get(['hoverOriginalEnabled'], result => {
-    toggle.checked = result.hoverOriginalEnabled !== false;
-  });
-  toggle.addEventListener('change', () => {
-    chrome.storage.sync.set({ hoverOriginalEnabled: toggle.checked });
+  const settings = [
+    { id: 'hideGTPopupToggle',       key: 'hideGTPopup',             def: true  },
+    { id: 'hoverOriginalToggle',     key: 'hoverOriginalEnabled',    def: true  },
+    { id: 'selectionOriginalToggle', key: 'selectionOriginalEnabled', def: false },
+  ];
+
+  chrome.storage.sync.get(settings.map(s => s.key), result => {
+    settings.forEach(s => {
+      const el = document.getElementById(s.id);
+      el.checked = result[s.key] === undefined ? s.def : Boolean(result[s.key]);
+      el.addEventListener('change', () => chrome.storage.sync.set({ [s.key]: el.checked }));
+    });
   });
 }
 

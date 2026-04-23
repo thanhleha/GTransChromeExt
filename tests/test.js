@@ -211,7 +211,7 @@ async function runTests() {
     const recentBtns = await popup.$$('.recent-btn');
 
     const navPromise = page.waitForURL(/(translate\.google\.com|\.translate\.goog)/, { timeout: 10000 }).catch(() => null);
-    await recentBtns[1].click();
+    try { await recentBtns[1].click(); } catch (e) { /* popup closes via window.close() — expected */ }
     await navPromise;
     await page.waitForTimeout(500);
 
@@ -421,6 +421,116 @@ async function runTests() {
     await page.close();
   } catch (e) {
     console.log(`  ${FAIL} Test 8 threw: ${e.message}`);
+    failed++;
+  }
+
+  // ─── Test 9: GT popup suppression hides injected GT elements ────────────
+  console.log('\nTest 9: GT popup suppression hides injected GT popup elements');
+  try {
+    const page = await context.newPage();
+    await page.goto(`https://de-m-wikipedia-org.translate.goog/wiki/Berlin?_x_tr_sl=de&_x_tr_tl=en`, {
+      waitUntil: 'domcontentloaded', timeout: 15000,
+    });
+    await page.waitForTimeout(800);
+
+    // Inject a fake GT popup element — the observer should hide it immediately.
+    const hidden = await page.evaluate(() => {
+      const fake = document.createElement('div');
+      fake.className = 'gt-baf-container';
+      fake.style.cssText = 'position:fixed;top:100px;left:100px;width:200px;height:100px;display:block;';
+      fake.textContent = 'Fake GT popup';
+      document.body.appendChild(fake);
+      // Give the MutationObserver one microtask tick to react.
+      return new Promise(resolve => {
+        setTimeout(() => {
+          const style = window.getComputedStyle(fake);
+          resolve({ display: fake.style.display, pointerEvents: fake.style.pointerEvents });
+        }, 100);
+      });
+    });
+
+    assert(
+      hidden.display === 'none',
+      `GT popup suppressed (display: ${hidden.display})`
+    );
+
+    await page.close();
+  } catch (e) {
+    console.log(`  ${FAIL} Test 9 threw: ${e.message}`);
+    failed++;
+  }
+
+  // ─── Test 10: Selection mode shows tooltip for selected text ─────────────
+  console.log('\nTest 10: Selecting text shows tooltip after 1 s (selection mode)');
+  try {
+    // Enable selection mode in storage before opening the page.
+    const settingsPage = await context.newPage();
+    await settingsPage.goto(`chrome-extension://${extensionId}/popup.html`);
+    await settingsPage.waitForLoadState('domcontentloaded');
+    await settingsPage.evaluate(() =>
+      chrome.storage.sync.set({ selectionOriginalEnabled: true })
+    );
+    await settingsPage.close();
+
+    const TEST_ORIGIN2 = 'https://de-m-wikipedia-org.translate.goog';
+    const TEST_URL2 = `${TEST_ORIGIN2}/wiki/Test2?_x_tr_sl=de&_x_tr_tl=en&_x_tr_hl=en`;
+
+    // Reuse existing mocked routes from test 8.
+    const page = await context.newPage();
+    await page.goto(TEST_URL2, { waitUntil: 'domcontentloaded', timeout: 15000 });
+    await page.waitForTimeout(800);
+
+    // Programmatically select "capital" in the paragraph.
+    const selPos = await page.evaluate(() => {
+      const para = document.getElementById('target');
+      if (!para || !para.firstChild) return null;
+      const text = para.firstChild.textContent;
+      const idx = text.indexOf('capital');
+      if (idx === -1) return null;
+      const range = document.createRange();
+      range.setStart(para.firstChild, idx);
+      range.setEnd(para.firstChild, idx + 'capital'.length);
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+      const r = range.getBoundingClientRect();
+      return { top: r.top };
+    });
+
+    assert(selPos !== null, 'Text selected programmatically');
+
+    // Wait 1.5 s for the selection timer to fire.
+    await page.waitForTimeout(1500);
+
+    const tooltipInfo2 = await page.evaluate(() => {
+      const el = document.getElementById('__qtrans_hover__');
+      if (!el) return null;
+      return { text: el.textContent.trim() };
+    });
+
+    assert(tooltipInfo2 !== null, 'Tooltip appears after 1 s selection');
+    if (tooltipInfo2) {
+      assert(
+        tooltipInfo2.text.includes('Hauptstadt'),
+        `Tooltip shows mocked original for selection — got: "${tooltipInfo2.text}"`
+      );
+    }
+
+    // Clear selection — tooltip should disappear.
+    await page.evaluate(() => window.getSelection().removeAllRanges());
+    await page.waitForTimeout(200);
+    const gone = await page.evaluate(() => !document.getElementById('__qtrans_hover__'));
+    assert(gone, 'Tooltip removed when selection is cleared');
+
+    await page.close();
+    // Reset selection mode setting via extension popup page.
+    const resetPage = await context.newPage();
+    await resetPage.goto(`chrome-extension://${extensionId}/popup.html`);
+    await resetPage.waitForLoadState('domcontentloaded');
+    await resetPage.evaluate(() => chrome.storage.sync.set({ selectionOriginalEnabled: false }));
+    await resetPage.close();
+  } catch (e) {
+    console.log(`  ${FAIL} Test 10 threw: ${e.message}`);
     failed++;
   }
 
