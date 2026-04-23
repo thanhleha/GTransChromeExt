@@ -3,7 +3,8 @@
 
   let hoverTimer = null;
   let enabled = true;
-  let detectedSourceLang = null;
+  let resolvedSourceLang = null;   // cached after first successful detection
+  let sourceLangPending = null;    // in-flight promise so we don't double-fetch
 
   chrome.storage.sync.get(['hoverOriginalEnabled'], result => {
     enabled = result.hoverOriginalEnabled !== false;
@@ -23,31 +24,71 @@
     };
   }
 
-  function discoverSourceLang(targetLang) {
-    if (detectedSourceLang) return detectedSourceLang;
+  // Try every reasonable metadata source for the original page language.
+  // Falls back to an API call against untranslated text snippets in the DOM.
+  async function resolveSourceLanguage(targetLang) {
+    if (resolvedSourceLang) return resolvedSourceLang;
+    if (sourceLangPending) return sourceLangPending;
 
-    const htmlLang = document.documentElement.getAttribute('lang');
-    if (htmlLang) {
-      const code = htmlLang.split('-')[0].toLowerCase();
-      if (code && code !== targetLang) {
-        detectedSourceLang = code;
-        return code;
+    sourceLangPending = (async () => {
+      const check = code => {
+        const c = (code || '').split(/[-_]/)[0].toLowerCase();
+        return c && c !== targetLang ? c : null;
+      };
+
+      // 1. _x_tr_sl URL param (already handled by caller but double-check)
+      const slParam = new URLSearchParams(window.location.search).get('_x_tr_sl');
+      if (slParam && slParam !== 'auto') return (resolvedSourceLang = slParam);
+
+      // 2. <html lang>
+      let lang = check(document.documentElement.getAttribute('lang'));
+      if (lang) return (resolvedSourceLang = lang);
+
+      // 3. og:locale
+      lang = check(document.querySelector('meta[property="og:locale"]')?.getAttribute('content'));
+      if (lang) return (resolvedSourceLang = lang);
+
+      // 4. http-equiv content-language
+      lang = check(document.querySelector('meta[http-equiv="content-language"]')?.getAttribute('content'));
+      if (lang) return (resolvedSourceLang = lang);
+
+      // 5. hreflang links (skip x-default)
+      for (const link of document.querySelectorAll('link[hreflang]')) {
+        lang = check(link.getAttribute('hreflang'));
+        if (lang) return (resolvedSourceLang = lang);
       }
-    }
 
-    const ogLocale = document.querySelector('meta[property="og:locale"]');
-    if (ogLocale) {
-      const code = (ogLocale.getAttribute('content') || '').split('_')[0].toLowerCase();
-      if (code && code !== targetLang) {
-        detectedSourceLang = code;
-        return code;
+      // 6. API-based detection using untranslated text (notranslate / code blocks)
+      //    These elements are left in the original language by Google Translate.
+      const samples = [];
+      document.querySelectorAll(
+        '.notranslate, [translate="no"], code, pre, [class*="code"]'
+      ).forEach(el => {
+        const t = (el.textContent || '').trim();
+        // Only plain text that has letters (skip numbers-only / symbols-only)
+        if (t.length >= 4 && /[a-zA-Z]{3}/.test(t)) samples.push(t.slice(0, 40));
+      });
+
+      for (const sample of samples.slice(0, 3)) {
+        try {
+          const url =
+            `https://translate.googleapis.com/translate_a/single` +
+            `?client=gtx&sl=auto&tl=${encodeURIComponent(targetLang)}&dt=t` +
+            `&q=${encodeURIComponent(sample)}`;
+          const resp = await fetch(url);
+          const data = await resp.json();
+          lang = check(data?.[2]);
+          if (lang) return (resolvedSourceLang = lang);
+        } catch (_) {}
       }
-    }
 
-    return null;
+      return null;
+    })();
+
+    return sourceLangPending;
   }
 
-  // Returns the word under (x,y) plus its Range and bounding rect.
+  // Returns the word under (x,y), its Range, and its bounding rect.
   function getWordInfoAtPoint(x, y) {
     const caret = document.caretRangeFromPoint(x, y);
     if (!caret || caret.startContainer.nodeType !== Node.TEXT_NODE) return null;
@@ -71,22 +112,6 @@
     return { word, range, rect: range.getBoundingClientRect() };
   }
 
-  // Walk up to the nearest block-level ancestor (p, div, h1-h6, li, td, …).
-  // Used to position the tooltip above the whole block so it never overlaps
-  // the lines of text below.
-  function getBlockAncestor(node) {
-    const BLOCKS = new Set([
-      'P','DIV','ARTICLE','SECTION','MAIN','ASIDE','LI','TD','TH',
-      'BLOCKQUOTE','PRE','H1','H2','H3','H4','H5','H6','HEADER','FOOTER','FIGURE',
-    ]);
-    let el = node.nodeType === Node.TEXT_NODE ? node.parentElement : node;
-    while (el && el !== document.body) {
-      if (BLOCKS.has(el.tagName)) return el;
-      el = el.parentElement;
-    }
-    return document.body;
-  }
-
   async function fetchOriginalWord(word, readingLang, originalLang) {
     const url =
       `https://translate.googleapis.com/translate_a/single` +
@@ -102,7 +127,7 @@
     return translated;
   }
 
-  // Overlay-based highlight — no DOM modification, never fails on complex GT markup.
+  // Overlay drawn at the word rect — no DOM modification, works on GT's nested <font> markup.
   function addPageHighlight(wordRect) {
     removePageHighlight();
     const el = document.createElement('div');
@@ -115,7 +140,7 @@
       `top:${Math.round(wordRect.top - 1)}px`,
       `width:${Math.round(wordRect.width + 4)}px`,
       `height:${Math.round(wordRect.height + 2)}px`,
-      'background:rgba(254,240,138,0.65)',
+      'background:rgba(254,240,138,0.7)',
       'border-radius:3px',
       'pointer-events:none',
     ].join(';');
@@ -126,9 +151,10 @@
     document.getElementById('__qtrans_mark__')?.remove();
   }
 
-  // Tooltip is placed above the block ancestor (entire paragraph), not just above
-  // the single word line, so it never covers the surrounding translated text.
-  function createTooltip(wordRect, blockRect, originalWord, langCode) {
+  // Tooltip anchored just above the hovered word's line.
+  // If no room above (near viewport top), flips just below the word instead.
+  // This avoids the "block ancestor is too tall → tooltip lands at page bottom" bug.
+  function createTooltip(wordRect, originalWord, langCode) {
     removeTooltipEl();
 
     const el = document.createElement('div');
@@ -166,16 +192,13 @@
       const th = el.offsetHeight;
       const GAP = 6;
 
-      // Horizontally center on the hovered word.
+      // Center horizontally on the word.
       let left = wordRect.left + wordRect.width / 2 - tw / 2;
       left = Math.max(8, Math.min(left, window.innerWidth - tw - 8));
 
-      // Vertically: above the block ancestor so no translated text is covered.
-      let top = blockRect.top - th - GAP;
-      if (top < 8) {
-        // Not enough room above — show below the block instead.
-        top = blockRect.bottom + GAP;
-      }
+      // Place above the word's top edge; flip below if too close to viewport top.
+      let top = wordRect.top - th - GAP;
+      if (top < 8) top = wordRect.bottom + GAP;
 
       el.style.left = left + 'px';
       el.style.top = top + 'px';
@@ -215,7 +238,7 @@
       if (targetLang === 'auto') return;
 
       if (sourceLang === 'auto') {
-        sourceLang = discoverSourceLang(targetLang);
+        sourceLang = await resolveSourceLanguage(targetLang);
         if (!sourceLang) return;
       }
 
@@ -224,9 +247,8 @@
       try {
         const original = await fetchOriginalWord(info.word, targetLang, sourceLang);
         if (original) {
-          const blockRect = getBlockAncestor(info.range.startContainer).getBoundingClientRect();
           addPageHighlight(info.rect);
-          createTooltip(info.rect, blockRect, original, sourceLang);
+          createTooltip(info.rect, original, sourceLang);
         }
       } catch (_) {}
     }, 1000);
