@@ -80,8 +80,10 @@ GTransChromeExt/
 ├── popup.html             # Extension popup UI
 ├── popup.css              # Google-style popup styling
 ├── popup.js               # Popup logic (recent langs, favorites, translate, search, settings)
-├── generate_icons.py      # Pure-Python icon generator (no external deps)
+├── resize_icon.js         # Crops + masks + resamples icons/source_1024.png → the 3 sizes
+├── generate_icons.py      # (legacy) pure-Python procedural icon generator
 ├── icons/
+│   ├── source_1024.png    # Hand-designed (AI-generated) source at 1024×1024
 │   ├── icon16.png
 │   ├── icon48.png
 │   └── icon128.png
@@ -119,11 +121,22 @@ node test.js
 
 ## Regenerating Icons
 
-If you want to regenerate the icons from scratch (requires Python, no external packages needed):
+1. Put a square source image at `icons/source_1024.png` (1024×1024 PNG,
+   rounded-square composition with margin around it is fine — the script
+   auto-crops to the rounded-square region).
+2. Run the resize script (uses Playwright's bundled Chromium to do the
+   cropping, masking, and high-quality downsampling — no extra deps
+   beyond what the test suite already installs):
 
-```bash
-python generate_icons.py
-```
+   ```bash
+   NODE_PATH=./tests/node_modules node resize_icon.js
+   ```
+
+   This produces `icons/icon16.png`, `icons/icon48.png`, and
+   `icons/icon128.png` with transparent rounded corners.
+
+> The older `generate_icons.py` produced a procedural blue-circle icon
+> and is kept only for historical reference.
 
 ## Permissions
 
