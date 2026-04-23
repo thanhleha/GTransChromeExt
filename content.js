@@ -9,8 +9,9 @@
   let sourceLangPending = null;
 
   function applySettings(s) {
-    hoverEnabled = s.hoverOriginalEnabled !== false;
-    selectionEnabled = s.selectionOriginalEnabled === true;
+    const mode = s.triggerMode || 'hover';
+    hoverEnabled = mode === 'hover';
+    selectionEnabled = mode === 'selection';
     const nextHide = s.hideGTPopup !== false;
     if (nextHide !== hideGTPopup || !gtObserver) {
       hideGTPopup = nextHide;
@@ -19,18 +20,16 @@
   }
 
   chrome.storage.sync.get(
-    ['hoverOriginalEnabled', 'selectionOriginalEnabled', 'hideGTPopup'],
+    ['triggerMode', 'hideGTPopup'],
     result => applySettings(result)
   );
 
   chrome.storage.onChanged.addListener(changes => {
     const next = {
-      hoverOriginalEnabled: hoverEnabled,
-      selectionOriginalEnabled: selectionEnabled,
+      triggerMode: hoverEnabled ? 'hover' : 'selection',
       hideGTPopup,
     };
-    if ('hoverOriginalEnabled' in changes) next.hoverOriginalEnabled = changes.hoverOriginalEnabled.newValue;
-    if ('selectionOriginalEnabled' in changes) next.selectionOriginalEnabled = changes.selectionOriginalEnabled.newValue;
+    if ('triggerMode' in changes) next.triggerMode = changes.triggerMode.newValue;
     if ('hideGTPopup' in changes) next.hideGTPopup = changes.hideGTPopup.newValue;
     applySettings(next);
   });
@@ -39,9 +38,9 @@
   // Hides the "Original text" popup that Google Translate injects on
   // .translate.goog pages when you hover/click translated text.
 
+  // Selector targets only actual GT popup containers, not content-level elements.
   const GT_SEL = [
     '.gt-baf-container',
-    '[class*="gt-baf"]',
     '.goog-te-bubble',
     '.goog-tooltip',
     '#goog-gt-tt',
@@ -57,12 +56,22 @@
   function isGTPopupNode(node) {
     if (node.nodeType !== Node.ELEMENT_NODE) return false;
     const c = (node.getAttribute('class') || '') + ' ' + (node.getAttribute('id') || '');
-    return /gt-baf|goog-te-bubble|goog-tooltip|goog-gt-tt/i.test(c);
+    return /gt-baf-container|goog-te-bubble|goog-tooltip|goog-gt-tt/i.test(c);
+  }
+
+  function injectGTSuppressCSS() {
+    if (document.getElementById('__qtrans_css__')) return;
+    const style = document.createElement('style');
+    style.id = '__qtrans_css__';
+    // Clear GT's blue paragraph hover highlight without hiding the paragraph.
+    style.textContent = '[class*="gt-baf"]{background:transparent!important;background-color:transparent!important}';
+    (document.head || document.documentElement).appendChild(style);
   }
 
   function startGTSuppression() {
     if (gtObserver) return;
-    // Hide any already-present GT popups.
+    injectGTSuppressCSS();
+    // Hide any already-present GT popup containers.
     document.querySelectorAll(GT_SEL).forEach(suppressEl);
 
     gtObserver = new MutationObserver(mutations => {
@@ -89,6 +98,7 @@
   function stopGTSuppression() {
     gtObserver?.disconnect();
     gtObserver = null;
+    document.getElementById('__qtrans_css__')?.remove();
   }
 
   // ─── Language detection ───────────────────────────────────────────────────

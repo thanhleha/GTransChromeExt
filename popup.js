@@ -253,17 +253,19 @@ async function init() {
   });
   searchInput.focus();
 
-  const settings = [
-    { id: 'hideGTPopupToggle',       key: 'hideGTPopup',             def: true  },
-    { id: 'hoverOriginalToggle',     key: 'hoverOriginalEnabled',    def: true  },
-    { id: 'selectionOriginalToggle', key: 'selectionOriginalEnabled', def: false },
-  ];
+  chrome.storage.sync.get(['hideGTPopup', 'triggerMode'], result => {
+    const hideEl = document.getElementById('hideGTPopupToggle');
+    hideEl.checked = result.hideGTPopup !== false;
+    hideEl.addEventListener('change', () => chrome.storage.sync.set({ hideGTPopup: hideEl.checked }));
 
-  chrome.storage.sync.get(settings.map(s => s.key), result => {
-    settings.forEach(s => {
-      const el = document.getElementById(s.id);
-      el.checked = result[s.key] === undefined ? s.def : Boolean(result[s.key]);
-      el.addEventListener('change', () => chrome.storage.sync.set({ [s.key]: el.checked }));
+    const mode = result.triggerMode || 'hover';
+    document.querySelectorAll('#triggerModeCtrl .seg-btn').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.mode === mode);
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('#triggerModeCtrl .seg-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        chrome.storage.sync.set({ triggerMode: btn.dataset.mode });
+      });
     });
   });
 }

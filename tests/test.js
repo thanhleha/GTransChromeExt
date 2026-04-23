@@ -468,7 +468,7 @@ async function runTests() {
     await settingsPage.goto(`chrome-extension://${extensionId}/popup.html`);
     await settingsPage.waitForLoadState('domcontentloaded');
     await settingsPage.evaluate(() =>
-      chrome.storage.sync.set({ selectionOriginalEnabled: true })
+      chrome.storage.sync.set({ triggerMode: 'selection' })
     );
     await settingsPage.close();
 
@@ -527,7 +527,7 @@ async function runTests() {
     const resetPage = await context.newPage();
     await resetPage.goto(`chrome-extension://${extensionId}/popup.html`);
     await resetPage.waitForLoadState('domcontentloaded');
-    await resetPage.evaluate(() => chrome.storage.sync.set({ selectionOriginalEnabled: false }));
+    await resetPage.evaluate(() => chrome.storage.sync.set({ triggerMode: 'hover' }));
     await resetPage.close();
   } catch (e) {
     console.log(`  ${FAIL} Test 10 threw: ${e.message}`);
