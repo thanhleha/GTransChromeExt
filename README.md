@@ -53,6 +53,17 @@ If the current page is already a Google Translate page, the extension extracts t
 4. Click **Load unpacked** and select the project folder
 5. The "Quick Google Translate" icon will appear in your toolbar
 
+## Reloading the extension after code changes
+
+When you pull new code or edit any file locally, Chrome won't pick up the changes automatically. To reload:
+
+1. Open `chrome://extensions/`
+2. Find **Quick Google Translate** in the list
+3. Click the **reload icon** (circular arrow ↺) on the extension card
+4. Close and reopen the extension popup — changes are now live
+
+> You do not need to remove and re-add the extension. The reload button is enough for JS/HTML/CSS changes. If you change `manifest.json`, a reload is also sufficient unless you add new permissions (which would require re-accepting them).
+
 ## Project Structure
 
 ```
