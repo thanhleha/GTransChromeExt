@@ -13,6 +13,22 @@ async function getRecentLanguages() {
   });
 }
 
+async function getPinnedLanguages() {
+  return new Promise(resolve => {
+    chrome.storage.sync.get(['pinnedLanguages'], result => {
+      resolve(result.pinnedLanguages || []);
+    });
+  });
+}
+
+async function togglePinnedLanguage(code) {
+  const pinned = await getPinnedLanguages();
+  const updated = pinned.includes(code) ? pinned.filter(c => c !== code) : [...pinned, code];
+  return new Promise(resolve => {
+    chrome.storage.sync.set({ pinnedLanguages: updated }, () => resolve(updated));
+  });
+}
+
 async function saveRecentLanguage(code) {
   const recent = await getRecentLanguages();
   const updated = [code, ...recent.filter(c => c !== code)].slice(0, 3);
@@ -101,6 +117,32 @@ function showError() {
   document.getElementById('mainContent').classList.add('hidden');
 }
 
+function renderFavorites(pinnedCodes) {
+  const section = document.getElementById('favoritesSection');
+  const divider = document.getElementById('favoritesDivider');
+  const container = document.getElementById('favButtons');
+  container.innerHTML = '';
+
+  if (pinnedCodes.length === 0) {
+    section.classList.add('hidden');
+    divider.classList.add('hidden');
+    return;
+  }
+
+  section.classList.remove('hidden');
+  divider.classList.remove('hidden');
+
+  pinnedCodes.forEach(code => {
+    const btn = document.createElement('button');
+    btn.className = 'fav-btn';
+    btn.textContent = getLangName(code);
+    btn.title = `Translate to ${getLangName(code)}`;
+    btn.dataset.lang = code;
+    btn.addEventListener('click', () => translatePage(code));
+    container.appendChild(btn);
+  });
+}
+
 function renderRecentButtons(recentCodes) {
   const container = document.getElementById('recentButtons');
   container.innerHTML = '';
@@ -114,7 +156,7 @@ function renderRecentButtons(recentCodes) {
   });
 }
 
-function renderLanguageList(filter = '') {
+function renderLanguageList(filter = '', pinned = []) {
   const container = document.getElementById('languageList');
   const lower = filter.toLowerCase().trim();
   const filtered = lower
@@ -134,7 +176,29 @@ function renderLanguageList(filter = '') {
   filtered.forEach(lang => {
     const item = document.createElement('div');
     item.className = 'lang-item';
-    item.innerHTML = `<span class="lang-item-name">${lang.name}</span><span class="lang-item-code">${lang.code}</span>`;
+
+    const nameSpan = document.createElement('span');
+    nameSpan.className = 'lang-item-name';
+    nameSpan.textContent = lang.name;
+
+    const codeSpan = document.createElement('span');
+    codeSpan.className = 'lang-item-code';
+    codeSpan.textContent = lang.code;
+
+    const star = document.createElement('button');
+    star.className = 'star-btn' + (pinned.includes(lang.code) ? ' pinned' : '');
+    star.textContent = '★';
+    star.title = pinned.includes(lang.code) ? 'Remove from favorites' : 'Add to favorites';
+    star.dataset.lang = lang.code;
+    star.addEventListener('click', async e => {
+      e.stopPropagation();
+      const newPinned = await togglePinnedLanguage(lang.code);
+      star.classList.toggle('pinned', newPinned.includes(lang.code));
+      star.title = newPinned.includes(lang.code) ? 'Remove from favorites' : 'Add to favorites';
+      renderFavorites(newPinned);
+    });
+
+    item.append(nameSpan, codeSpan, star);
     item.addEventListener('click', () => translatePage(lang.code));
     container.appendChild(item);
   });
@@ -177,12 +241,16 @@ async function init() {
     document.getElementById('showOriginalBtn').addEventListener('click', () => showOriginalPage(tab));
   }
 
-  const recent = await getRecentLanguages();
+  const [recent, pinned] = await Promise.all([getRecentLanguages(), getPinnedLanguages()]);
+  renderFavorites(pinned);
   renderRecentButtons(recent);
-  renderLanguageList();
+  renderLanguageList('', pinned);
 
   const searchInput = document.getElementById('searchInput');
-  searchInput.addEventListener('input', () => renderLanguageList(searchInput.value));
+  searchInput.addEventListener('input', async () => {
+    const currentPinned = await getPinnedLanguages();
+    renderLanguageList(searchInput.value, currentPinned);
+  });
   searchInput.focus();
 }
 

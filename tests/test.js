@@ -283,6 +283,46 @@ async function runTests() {
     failed++;
   }
 
+  // ─── Test 7: Pin/unpin a language adds/removes it from favorites ─────────
+  console.log('\nTest 7: Pin/unpin language updates favorites section');
+  try {
+    const page = await context.newPage();
+    await page.goto('https://example.com');
+    await page.waitForTimeout(500);
+
+    // Open popup — favorites section should be hidden initially
+    const popup1 = await openPopup(context, extensionId);
+    const favSection = await popup1.$('#favoritesSection');
+    const initialClass = await favSection.getAttribute('class');
+    assert(initialClass.includes('hidden'), 'Favorites section is hidden when no languages pinned');
+
+    // Find the star next to French and click it
+    await popup1.fill('#searchInput', 'French');
+    await popup1.waitForTimeout(150);
+    const frenchStar = await popup1.$('.star-btn');
+    assert(frenchStar !== null, 'Star button found for French');
+    await frenchStar.click();
+    await popup1.waitForTimeout(200);
+
+    const favSectionAfterPin = await popup1.$('#favoritesSection');
+    const classAfterPin = await favSectionAfterPin.getAttribute('class');
+    assert(!classAfterPin.includes('hidden'), 'Favorites section is visible after pinning');
+    const favBtns = await popup1.$$('.fav-btn');
+    assert(favBtns.length === 1, `Favorites has 1 button (got ${favBtns.length})`);
+
+    // Unpin — click the star again (now filled/pinned)
+    await frenchStar.click();
+    await popup1.waitForTimeout(200);
+    const classAfterUnpin = await favSectionAfterPin.getAttribute('class');
+    assert(classAfterUnpin.includes('hidden'), 'Favorites section hidden after unpinning');
+
+    await popup1.close();
+    await page.close();
+  } catch (e) {
+    console.log(`  ${FAIL} Test 7 threw: ${e.message}`);
+    failed++;
+  }
+
   // ─── Summary ─────────────────────────────────────────────────────────────
   console.log(`\n${'─'.repeat(50)}`);
   const total = passed + failed;
