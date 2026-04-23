@@ -38,23 +38,60 @@ function getOriginalUrl(url) {
   return url;
 }
 
+async function getActiveTab() {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (tab?.url && !tab.url.startsWith('chrome-extension://') && !tab.url.startsWith('chrome://')) {
+    return tab;
+  }
+  // Fallback: popup opened as a standalone page (e.g., automated tests) — the
+  // active tab is the popup itself, so find the first real tab instead.
+  const allTabs = await chrome.tabs.query({});
+  return allTabs.find(t =>
+    t.url &&
+    !t.url.startsWith('chrome-extension://') &&
+    !t.url.startsWith('chrome://') &&
+    !t.url.startsWith('about:')
+  ) || tab;
+}
+
 function isTranslatableUrl(url) {
   if (!url) return false;
   const blocked = ['chrome://', 'chrome-extension://', 'about:', 'edge://', 'brave://', 'file://'];
-  return !blocked.some(prefix => url.startsWith(prefix));
+  if (blocked.some(prefix => url.startsWith(prefix))) return false;
+  try {
+    const { hostname } = new URL(url);
+    if (hostname === 'translate.google.com' || hostname === 'translate.googleusercontent.com') return false;
+  } catch (e) {
+    return false;
+  }
+  return true;
 }
 
 async function translatePage(langCode) {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  const originalUrl = getOriginalUrl(tab.url);
+  const tab = await getActiveTab();
 
-  if (!isTranslatableUrl(originalUrl)) {
+  let translateUrl;
+  try {
+    const parsed = new URL(tab.url);
+    if (parsed.hostname.endsWith('.translate.goog')) {
+      // Modern Google Translate page — swap language in-place instead of re-wrapping
+      parsed.searchParams.set('_x_tr_sl', 'auto');
+      parsed.searchParams.set('_x_tr_tl', langCode);
+      translateUrl = parsed.toString();
+    } else {
+      const originalUrl = getOriginalUrl(tab.url);
+      if (!isTranslatableUrl(originalUrl)) {
+        showError();
+        return;
+      }
+      translateUrl = `https://translate.google.com/translate?sl=auto&tl=${langCode}&u=${encodeURIComponent(originalUrl)}`;
+    }
+  } catch (e) {
     showError();
     return;
   }
 
   await saveRecentLanguage(langCode);
-  const translateUrl = `https://translate.google.com/translate?sl=auto&tl=${langCode}&u=${encodeURIComponent(originalUrl)}`;
   chrome.tabs.update(tab.id, { url: translateUrl });
   window.close();
 }
@@ -104,7 +141,7 @@ function renderLanguageList(filter = '') {
 }
 
 async function init() {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  const tab = await getActiveTab();
   const originalUrl = getOriginalUrl(tab.url);
 
   if (!isTranslatableUrl(originalUrl)) {

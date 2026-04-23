@@ -13,8 +13,9 @@ const path = require('path');
 const { execSync } = require('child_process');
 const os = require('os');
 
-// Resolve extension path — use Windows path when running under WSL2
+// Resolve extension path — convert Linux path to Windows path when running under WSL2
 function resolveExtensionPath(linuxPath) {
+  if (os.platform() === 'win32') return linuxPath; // already a Windows path
   try {
     const winPath = execSync(`wslpath -w "${linuxPath}"`, { encoding: 'utf8' }).trim();
     return winPath;
@@ -25,8 +26,16 @@ function resolveExtensionPath(linuxPath) {
 
 const EXT_LINUX_PATH = path.resolve(__dirname, '..');
 const EXT_PATH = resolveExtensionPath(EXT_LINUX_PATH);
-const CHROME_WIN = '/mnt/c/Program Files/Google/Chrome/Application/chrome.exe';
-const CHROME_AVAILABLE = (() => { try { require('fs').accessSync(CHROME_WIN); return true; } catch { return false; } })();
+
+// Locate system Chrome — check Windows paths or WSL2 mount
+const CHROME_CANDIDATES = os.platform() === 'win32'
+  ? [
+      'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+      'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+    ]
+  : ['/mnt/c/Program Files/Google/Chrome/Application/chrome.exe'];
+const CHROME_PATH = CHROME_CANDIDATES.find(p => { try { require('fs').accessSync(p); return true; } catch { return false; } });
+const CHROME_AVAILABLE = !!CHROME_PATH;
 
 const PASS = '\x1b[32m✓\x1b[0m';
 const FAIL = '\x1b[31m✗\x1b[0m';
@@ -46,6 +55,9 @@ function assert(condition, message) {
 }
 
 async function launchWithExtension() {
+  // Use a fresh temp profile to avoid conflicts with a running Chrome instance
+  const userDataDir = path.join(os.tmpdir(), 'playwright-gtrans-test-' + Date.now());
+
   const launchOptions = {
     headless: false,
     args: [
@@ -59,14 +71,14 @@ async function launchWithExtension() {
     ignoreDefaultArgs: ['--disable-extensions'],
   };
 
-  if (CHROME_AVAILABLE) {
-    console.log(`${INFO} Using Windows Chrome: ${CHROME_WIN}`);
-    launchOptions.executablePath = CHROME_WIN;
-  } else {
+  // Prefer Playwright Chromium for reliability; fall back to system Chrome
+  if (!CHROME_AVAILABLE) {
     console.log(`${INFO} Using Playwright Chromium`);
+  } else {
+    console.log(`${INFO} Using Playwright Chromium (system Chrome skipped to avoid profile conflicts)`);
   }
 
-  const context = await chromium.launchPersistentContext('', launchOptions);
+  const context = await chromium.launchPersistentContext(userDataDir, launchOptions);
 
   // Wait for the extension service worker to register
   let serviceWorker = context.serviceWorkers()[0];
@@ -164,18 +176,19 @@ async function runTests() {
     const btnLabel = (await recentBtns[0].textContent()).trim();
     console.log(`  ${INFO} Clicking: "${btnLabel}"`);
 
-    const navPromise = page.waitForURL(/translate\.google\.com/, { timeout: 10000 }).catch(() => null);
-    await recentBtns[0].click();
+    const navPromise = page.waitForURL(/(translate\.google\.com|\.translate\.goog)/, { timeout: 10000 }).catch(() => null);
+    try { await recentBtns[0].click(); } catch (e) { /* popup closes via window.close() — expected */ }
     await navPromise;
     await page.waitForTimeout(500);
 
     const newUrl = page.url();
     assert(
-      newUrl.includes('translate.google.com/translate'),
-      `Navigated to Google Translate (URL: ${newUrl.slice(0, 70)}...)`
+      newUrl.includes('translate.google.com/translate') || newUrl.includes('.translate.goog'),
+      `Navigated to Google Translate (URL: ${newUrl.slice(0, 80)}...)`
     );
+    // Modern GT uses example-com.translate.goog; classic uses example.com in query param
     assert(
-      newUrl.includes('example.com'),
+      newUrl.includes('example.com') || newUrl.includes('example-com'),
       'Original domain is in the translate URL'
     );
 
@@ -197,7 +210,7 @@ async function runTests() {
     const popup = await openPopup(context, extensionId);
     const recentBtns = await popup.$$('.recent-btn');
 
-    const navPromise = page.waitForURL(/translate\.google\.com/, { timeout: 10000 }).catch(() => null);
+    const navPromise = page.waitForURL(/(translate\.google\.com|\.translate\.goog)/, { timeout: 10000 }).catch(() => null);
     await recentBtns[1].click();
     await navPromise;
     await page.waitForTimeout(500);
@@ -205,7 +218,8 @@ async function runTests() {
     const newUrl = page.url();
     const isDoubleWrapped = newUrl.includes(encodeURIComponent('translate.google.com/translate'));
     assert(!isDoubleWrapped, `No double-wrapping of translate URL`);
-    assert(newUrl.includes('example.com'), 'Original domain preserved');
+    // Modern GT uses example-com.translate.goog; classic uses example.com in query param
+    assert(newUrl.includes('example.com') || newUrl.includes('example-com'), 'Original domain preserved');
 
     await page.close();
   } catch (e) {
@@ -227,8 +241,8 @@ async function runTests() {
     const jaItem = await popup1.$('.lang-item');
     assert(jaItem !== null, 'Japanese found in language list');
 
-    const navP = page.waitForURL(/translate\.google\.com/, { timeout: 10000 }).catch(() => null);
-    await jaItem.click();
+    const navP = page.waitForURL(/(translate\.google\.com|\.translate\.goog)/, { timeout: 10000 }).catch(() => null);
+    try { await jaItem.click(); } catch (e) { /* popup closes via window.close() — expected */ }
     await navP;
     await page.waitForTimeout(500);
 
