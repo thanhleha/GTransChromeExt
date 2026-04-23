@@ -68,11 +68,22 @@
     (document.head || document.documentElement).appendChild(style);
   }
 
+  function clearGTBackground(el) {
+    // Guard: stop if already cleared to avoid observer feedback loop.
+    if (el.style.getPropertyValue('background-color') === 'transparent') return;
+    el.style.setProperty('background', 'transparent', 'important');
+    el.style.setProperty('background-color', 'transparent', 'important');
+  }
+
   function startGTSuppression() {
     if (gtObserver) return;
     injectGTSuppressCSS();
     // Hide any already-present GT popup containers.
     document.querySelectorAll(GT_SEL).forEach(suppressEl);
+    // Clear backgrounds on any already-highlighted content elements.
+    document.querySelectorAll('[class*="gt-baf"]').forEach(el => {
+      if (!isGTPopupNode(el)) clearGTBackground(el);
+    });
 
     gtObserver = new MutationObserver(mutations => {
       for (const mut of mutations) {
@@ -80,9 +91,15 @@
           if (isGTPopupNode(node)) suppressEl(node);
           node.querySelectorAll?.(GT_SEL).forEach(suppressEl);
         }
-        // Catch GT popups made visible via inline style change.
-        if (mut.type === 'attributes' && isGTPopupNode(mut.target)) {
-          suppressEl(mut.target);
+        if (mut.type === 'attributes' && mut.target.nodeType === Node.ELEMENT_NODE) {
+          const target = mut.target;
+          if (isGTPopupNode(target)) {
+            suppressEl(target);
+          } else if (/gt-baf/i.test(target.getAttribute('class') || '')) {
+            // Content element received a gt-baf* class or style update — clear the hover highlight.
+            // Inline style with !important wins over GT's own CSS regardless of cascade order.
+            clearGTBackground(target);
+          }
         }
       }
     });

@@ -460,6 +460,50 @@ async function runTests() {
     failed++;
   }
 
+  // ─── Test 9b: GT paragraph highlight (gt-baf* on content) is cleared ────
+  console.log('\nTest 9b: GT paragraph highlight background is cleared inline');
+  try {
+    const page = await context.newPage();
+    await page.goto(`https://de-m-wikipedia-org.translate.goog/wiki/BerlinBAF?_x_tr_sl=de&_x_tr_tl=en`, {
+      waitUntil: 'domcontentloaded', timeout: 15000,
+    });
+    await page.waitForTimeout(800);
+
+    // Simulate GT hover: add a paragraph and apply a gt-baf* class + blue background like GT does.
+    const result = await page.evaluate(() => {
+      const p = document.createElement('p');
+      p.id = 'bafTarget';
+      p.textContent = 'Hovered paragraph content.';
+      document.body.appendChild(p);
+      return new Promise(resolve => {
+        setTimeout(() => {
+          p.className = 'gt-baf-c';
+          p.style.backgroundColor = 'rgb(197, 216, 248)';
+          setTimeout(() => {
+            const bgInline = p.style.getPropertyValue('background-color');
+            const bgComputed = window.getComputedStyle(p).backgroundColor;
+            resolve({ bgInline, bgComputed, stillVisible: !!p.offsetHeight });
+          }, 120);
+        }, 50);
+      });
+    });
+
+    assert(
+      result.bgInline === 'transparent',
+      `Inline background cleared by observer (got: "${result.bgInline}")`
+    );
+    assert(
+      result.bgComputed === 'rgba(0, 0, 0, 0)' || result.bgComputed === 'transparent',
+      `Computed background is transparent (got: "${result.bgComputed}")`
+    );
+    assert(result.stillVisible, 'Paragraph is still visible (not hidden by display:none)');
+
+    await page.close();
+  } catch (e) {
+    console.log(`  ${FAIL} Test 9b threw: ${e.message}`);
+    failed++;
+  }
+
   // ─── Test 10: Selection mode shows tooltip for selected text ─────────────
   console.log('\nTest 10: Selecting text shows tooltip after 1 s (selection mode)');
   try {
