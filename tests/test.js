@@ -1,5 +1,5 @@
 /**
- * Playwright integration test for Quick Google Translate extension.
+ * Playwright integration test for Quick Webpage Translate extension.
  *
  * Run:
  *   cd tests
@@ -99,7 +99,7 @@ async function openPopup(context, extensionId) {
 }
 
 async function runTests() {
-  console.log('\n\x1b[1mQuick Google Translate — Extension Tests\x1b[0m\n');
+  console.log('\n\x1b[1mQuick Webpage Translate — Extension Tests\x1b[0m\n');
   console.log(`Extension path: ${EXT_PATH}`);
 
   let context, extensionId;

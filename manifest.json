@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "Quick Google Translate",
+  "name": "Quick Webpage Translate",
   "version": "0.2.1",
   "description": "One-click translation to your recent & pinned languages. Hover or select a word on translated pages to reveal the original.",
   "permissions": ["storage", "tabs"],
@@ -14,7 +14,7 @@
   ],
   "action": {
     "default_popup": "popup.html",
-    "default_title": "Quick Translate",
+    "default_title": "Quick Webpage Translate",
     "default_icon": {
       "16": "icons/icon16.png",
       "48": "icons/icon48.png",

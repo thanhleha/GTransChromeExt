@@ -1,4 +1,4 @@
-# Quick Google Translate — Chrome Extension
+# Quick Webpage Translate — Chrome Extension
 
 A Chrome extension (Manifest V3) that adds one-click translation to your **3 most recently used languages**, eliminating the need to navigate Google Translate's full language list every time.
 
@@ -56,14 +56,14 @@ If the current page is already a Google Translate page, the extension extracts t
 2. Open Chrome and navigate to `chrome://extensions/`
 3. Enable **Developer mode** (top-right toggle)
 4. Click **Load unpacked** and select the project folder
-5. The "Quick Google Translate" icon will appear in your toolbar
+5. The "Quick Webpage Translate" icon will appear in your toolbar
 
 ## Reloading the extension after code changes
 
 When you pull new code or edit any file locally, Chrome won't pick up the changes automatically. To reload:
 
 1. Open `chrome://extensions/`
-2. Find **Quick Google Translate** in the list
+2. Find **Quick Webpage Translate** in the list
 3. Click the **reload icon** (circular arrow ↺) on the extension card
 4. Close and reopen the extension popup — changes are now live
 
@@ -135,7 +135,7 @@ python generate_icons.py
 
 ## Potential Future Improvements
 
-- Right-click context menu → Quick Translate → [lang]
+- Right-click context menu → Quick Webpage Translate → [lang]
 - Keyboard shortcuts for the 3 recent language buttons
 
 ---
