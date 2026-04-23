@@ -514,6 +514,57 @@ async function runTests() {
     failed++;
   }
 
+  // ─── Test 9c: GT blue bg cleared via color detection (no gt-baf class) ──
+  console.log('\nTest 9c: GT-blue background cleared even without gt-baf class');
+  try {
+    const page = await context.newPage();
+    await page.goto(`https://de-m-wikipedia-org.translate.goog/wiki/ColorDetect?_x_tr_sl=de&_x_tr_tl=en`, {
+      waitUntil: 'domcontentloaded', timeout: 15000,
+    });
+    await page.waitForTimeout(800);
+
+    // Simulate GT applying hover highlight to a paragraph with NO gt-baf class:
+    // this is the case my observer missed before (user reported blue highlight
+    // still showed). The observer should now detect the GT-blue color itself.
+    const result = await page.evaluate(() => {
+      const p = document.createElement('p');
+      p.id = 'noClassTarget';
+      p.textContent = 'Plain paragraph, no GT class on it.';
+      document.body.appendChild(p);
+      return new Promise(resolve => {
+        setTimeout(() => {
+          // GT's signature light-blue tint applied inline, no class added.
+          p.style.backgroundColor = 'rgb(232, 240, 254)';
+          setTimeout(() => {
+            const cs = window.getComputedStyle(p);
+            resolve({
+              bgInline: p.style.getPropertyValue('background-color'),
+              bgComputed: cs.backgroundColor,
+              stillVisible: !!p.offsetHeight,
+              classList: p.className,
+            });
+          }, 120);
+        }, 50);
+      });
+    });
+
+    assert(
+      result.bgInline === 'transparent',
+      `Inline GT-blue background cleared via color detection (got: "${result.bgInline}")`
+    );
+    assert(
+      result.bgComputed === 'rgba(0, 0, 0, 0)' || result.bgComputed === 'transparent',
+      `Computed background transparent (got: "${result.bgComputed}")`
+    );
+    assert(result.stillVisible, 'Paragraph still visible (not hidden)');
+    assert(result.classList === '', 'Confirm no class was needed for detection');
+
+    await page.close();
+  } catch (e) {
+    console.log(`  ${FAIL} Test 9c threw: ${e.message}`);
+    failed++;
+  }
+
   // ─── Test 10: Selection mode shows tooltip for selected text ─────────────
   console.log('\nTest 10: Selecting text shows tooltip after 1 s (selection mode)');
   try {

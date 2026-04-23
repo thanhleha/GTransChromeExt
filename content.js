@@ -63,9 +63,12 @@
     if (document.getElementById('__qtrans_css__')) return;
     const style = document.createElement('style');
     style.id = '__qtrans_css__';
-    // Clear GT's blue paragraph hover highlight without hiding the paragraph.
+    // First-pass fallback against GT's own stylesheet rules. Cascade order can
+    // still let GT win — the observer applies inline !important as the primary
+    // mechanism. We broaden the selector to any gt-* / goog-te-* class because
+    // the exact class name GT uses for paragraph hover highlight isn't stable.
     style.textContent =
-      '[class*="gt-baf"]{' +
+      '[class*="gt-baf"],[class^="gt-"],[class*=" gt-"],[class*="goog-te-"]{' +
       'background:transparent!important;' +
       'background-color:transparent!important;' +
       'border-color:transparent!important;' +
@@ -76,18 +79,49 @@
     (document.head || document.documentElement).appendChild(style);
   }
 
+  // Any class in the token list that starts with "gt-" or "goog-te-" implies
+  // the element is part of GT's Back-and-Forth translation machinery.
+  function hasGTClass(cls) {
+    if (!cls) return false;
+    const tokens = cls.split(/\s+/);
+    for (const t of tokens) {
+      if (/^gt-|^goog-te-/i.test(t)) return true;
+    }
+    return false;
+  }
+
+  // GT applies a very specific light-blue tint on hover. Colors observed:
+  //   rgb(232, 240, 254), rgb(210, 227, 252), rgb(197, 216, 248),
+  //   rgba(66, 133, 244, 0.1..0.3)
+  // This predicate matches those without touching ordinary site backgrounds.
+  function isGTBlueBg(el) {
+    const bg = window.getComputedStyle(el).backgroundColor;
+    if (!bg) return false;
+    const m = bg.match(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)(?:\s*,\s*([\d.]+))?/);
+    if (!m) return false;
+    const r = +m[1], g = +m[2], b = +m[3];
+    const a = m[4] != null ? +m[4] : 1;
+    if (a === 0) return false;
+    // Opaque light-blue tint: rgb(232,240,254) etc. Blue highest, green high, red moderate.
+    if (a > 0.5 && b >= 220 && g >= 200 && r >= 150 && b > r && b >= g) return true;
+    // Translucent Google primary tint: rgba(66,133,244,0.1..0.3).
+    if (a > 0 && a < 0.5 && b > r && b > 200 && g > r && r < 120) return true;
+    return false;
+  }
+
   function clearGTHighlight(el) {
     // Guard against observer feedback loop: only our code sets bg to
-    // 'transparent' + border-left-width to '0px', so if both are already
-    // cleared, GT hasn't re-applied anything since we last ran.
+    // 'transparent' AND border-left-width to '0px'. If both already cleared,
+    // GT hasn't re-applied anything since last pass — skip.
     if (
       el.style.getPropertyValue('background-color') === 'transparent' &&
       el.style.getPropertyValue('border-left-width') === '0px'
     ) return;
 
-    // Inline !important beats GT's own CSS regardless of cascade order.
+    // Inline !important beats any stylesheet rule regardless of cascade order.
     el.style.setProperty('background', 'transparent', 'important');
     el.style.setProperty('background-color', 'transparent', 'important');
+    el.style.setProperty('background-image', 'none', 'important');
     // GT's paragraph hover also draws a left-edge blue bar via border-left.
     el.style.setProperty('border-left', '0 none transparent', 'important');
     el.style.setProperty('border-right', '0 none transparent', 'important');
@@ -97,14 +131,22 @@
     el.style.setProperty('box-shadow', 'none', 'important');
   }
 
+  function shouldClearHighlight(el) {
+    if (!el || el.nodeType !== Node.ELEMENT_NODE) return false;
+    // Don't touch our own injected elements (tooltip, highlight overlay, style tag).
+    if (el.id && el.id.startsWith('__qtrans_')) return false;
+    if (isGTPopupNode(el)) return false;
+    return hasGTClass(el.getAttribute('class') || '') || isGTBlueBg(el);
+  }
+
   function startGTSuppression() {
     if (gtObserver) return;
     injectGTSuppressCSS();
     // Hide any already-present GT popup containers.
     document.querySelectorAll(GT_SEL).forEach(suppressEl);
-    // Clear backgrounds on any already-highlighted content elements.
-    document.querySelectorAll('[class*="gt-baf"]').forEach(el => {
-      if (!isGTPopupNode(el)) clearGTHighlight(el);
+    // Clear highlights on any element already decorated with a gt-* class.
+    document.querySelectorAll('[class*="gt-"],[class*="goog-te-"]').forEach(el => {
+      if (shouldClearHighlight(el)) clearGTHighlight(el);
     });
 
     gtObserver = new MutationObserver(mutations => {
@@ -117,9 +159,8 @@
           const target = mut.target;
           if (isGTPopupNode(target)) {
             suppressEl(target);
-          } else if (/gt-baf/i.test(target.getAttribute('class') || '')) {
-            // Content element received a gt-baf* class or style update — clear the hover highlight.
-            // Inline style with !important wins over GT's own CSS regardless of cascade order.
+          } else if (shouldClearHighlight(target)) {
+            // Content element received a GT hover decoration — clear it.
             clearGTHighlight(target);
           }
         }
