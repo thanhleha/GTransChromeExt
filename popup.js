@@ -140,6 +140,28 @@ function renderLanguageList(filter = '') {
   });
 }
 
+function isTranslatedPage(url) {
+  try {
+    const { hostname, href } = new URL(url);
+    return hostname.endsWith('.translate.goog') || href.includes('translate.google.com/translate');
+  } catch (e) {
+    return false;
+  }
+}
+
+async function showOriginalPage(tab) {
+  try {
+    const { hostname } = new URL(tab.url);
+    if (hostname.endsWith('.translate.goog')) {
+      chrome.tabs.goBack(tab.id);
+    } else {
+      const origUrl = new URL(tab.url).searchParams.get('u');
+      if (origUrl) chrome.tabs.update(tab.id, { url: origUrl });
+    }
+  } catch (e) {}
+  window.close();
+}
+
 async function init() {
   const tab = await getActiveTab();
   const originalUrl = getOriginalUrl(tab.url);
@@ -147,6 +169,12 @@ async function init() {
   if (!isTranslatableUrl(originalUrl)) {
     showError();
     return;
+  }
+
+  if (isTranslatedPage(tab.url)) {
+    const bar = document.getElementById('showOriginalBar');
+    bar.classList.remove('hidden');
+    document.getElementById('showOriginalBtn').addEventListener('click', () => showOriginalPage(tab));
   }
 
   const recent = await getRecentLanguages();
