@@ -18,13 +18,12 @@
 
   function getPageLangs() {
     const params = new URLSearchParams(window.location.search);
-    const sourceLang = params.get('_x_tr_sl') || 'auto';
-    const targetLang = params.get('_x_tr_tl') || 'auto';
-    return { sourceLang, targetLang };
+    return {
+      sourceLang: params.get('_x_tr_sl') || 'auto',
+      targetLang: params.get('_x_tr_tl') || 'auto',
+    };
   }
 
-  // When sl=auto, try to discover the original language from page metadata.
-  // Google Translate often leaves og:locale and html[lang] untouched.
   function discoverSourceLang(targetLang) {
     if (detectedSourceLang) return detectedSourceLang;
 
@@ -49,26 +48,31 @@
     return null;
   }
 
-  function getWordAtPoint(x, y) {
-    const range = document.caretRangeFromPoint(x, y);
-    if (!range || range.startContainer.nodeType !== Node.TEXT_NODE) return null;
+  // Returns the word under (x, y), its cleaned text, the Range, and the bounding rect.
+  function getWordInfoAtPoint(x, y) {
+    const caret = document.caretRangeFromPoint(x, y);
+    if (!caret || caret.startContainer.nodeType !== Node.TEXT_NODE) return null;
 
-    const text = range.startContainer.textContent;
-    const offset = range.startOffset;
+    const node = caret.startContainer;
+    const text = node.textContent;
+    const offset = caret.startOffset;
 
     let start = offset;
     let end = offset;
     while (start > 0 && !/\s/.test(text[start - 1])) start--;
     while (end < text.length && !/\s/.test(text[end])) end++;
 
-    const raw = text.slice(start, end);
-    // Strip leading/trailing punctuation, keep unicode letters/numbers
-    const word = raw.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '');
-    return word.length >= 2 ? word : null;
+    const word = text.slice(start, end).replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '');
+    if (word.length < 2) return null;
+
+    const range = document.createRange();
+    range.setStart(node, start);
+    range.setEnd(node, end);
+
+    return { word, range, rect: range.getBoundingClientRect() };
   }
 
   async function fetchOriginalWord(word, readingLang, originalLang) {
-    // Translate word FROM readingLang (what the user sees) BACK TO originalLang
     const url =
       `https://translate.googleapis.com/translate_a/single` +
       `?client=gtx&sl=${encodeURIComponent(readingLang)}&tl=${encodeURIComponent(originalLang)}` +
@@ -83,9 +87,29 @@
     return translated;
   }
 
-  function createTooltip(x, y, originalWord, langCode) {
-    removeTooltip();
+  // Temporarily wrap the hovered word with a yellow highlight mark.
+  function addPageHighlight(wordRange) {
+    removePageHighlight();
+    try {
+      const mark = document.createElement('mark');
+      mark.id = '__qtrans_mark__';
+      mark.style.cssText = 'background:#fef08a !important;color:inherit !important;border-radius:2px;';
+      wordRange.surroundContents(mark);
+    } catch (_) {}
+  }
 
+  function removePageHighlight() {
+    const mark = document.getElementById('__qtrans_mark__');
+    if (!mark) return;
+    const parent = mark.parentNode;
+    if (!parent) return;
+    while (mark.firstChild) parent.insertBefore(mark.firstChild, mark);
+    parent.removeChild(mark);
+    parent.normalize();
+  }
+
+  // Tooltip is positioned above the word's bounding rect, centered horizontally.
+  function createTooltip(wordRect, originalWord, langCode) {
     const el = document.createElement('div');
     el.id = '__qtrans_hover__';
     el.style.cssText = [
@@ -95,8 +119,8 @@
       'background:#303134',
       'color:#e8eaed',
       'border-radius:6px',
-      'padding:6px 10px',
-      'font:400 13px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif',
+      'padding:5px 10px 6px',
+      'font:400 13px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif',
       'pointer-events:none',
       'max-width:260px',
       'word-break:break-word',
@@ -106,11 +130,11 @@
     ].join(';');
 
     const label = document.createElement('div');
-    label.style.cssText = 'font-size:10px;color:#9aa0a6;margin-bottom:3px;';
+    label.style.cssText = 'font-size:10px;color:#9aa0a6;margin-bottom:2px;';
     label.textContent = `Original (${langCode})`;
 
     const wordEl = document.createElement('div');
-    wordEl.style.cssText = 'font-weight:500;';
+    wordEl.style.cssText = 'font-weight:600;font-size:14px;';
     wordEl.textContent = originalWord;
 
     el.append(label, wordEl);
@@ -120,10 +144,14 @@
     requestAnimationFrame(() => {
       const tw = el.offsetWidth;
       const th = el.offsetHeight;
-      let left = x + 14;
-      let top = y - th - 10;
-      if (left + tw > window.innerWidth - 8) left = x - tw - 14;
-      if (top < 8) top = y + 22;
+
+      // Center above the word; flip below if not enough space
+      let left = wordRect.left + wordRect.width / 2 - tw / 2;
+      let top = wordRect.top - th - 8;
+
+      left = Math.max(8, Math.min(left, window.innerWidth - tw - 8));
+      if (top < 8) top = wordRect.bottom + 8;
+
       el.style.left = left + 'px';
       el.style.top = top + 'px';
       el.style.opacity = '1';
@@ -137,6 +165,7 @@
       activeTooltip.remove();
       activeTooltip = null;
     }
+    removePageHighlight();
   }
 
   let lastX = 0;
@@ -151,12 +180,13 @@
       activeTooltip.remove();
       activeTooltip = null;
     }
+    removePageHighlight();
 
     if (!enabled) return;
 
     hoverTimer = setTimeout(async () => {
-      const word = getWordAtPoint(lastX, lastY);
-      if (!word) return;
+      const info = getWordInfoAtPoint(lastX, lastY);
+      if (!info) return;
 
       let { sourceLang, targetLang } = getPageLangs();
       if (targetLang === 'auto') return;
@@ -169,9 +199,10 @@
       if (sourceLang === targetLang) return;
 
       try {
-        const original = await fetchOriginalWord(word, targetLang, sourceLang);
+        const original = await fetchOriginalWord(info.word, targetLang, sourceLang);
         if (original) {
-          createTooltip(lastX, lastY, original, sourceLang);
+          addPageHighlight(info.range);
+          createTooltip(info.rect, original, sourceLang);
         }
       } catch (_) {}
     }, 1000);
