@@ -64,15 +64,37 @@
     const style = document.createElement('style');
     style.id = '__qtrans_css__';
     // Clear GT's blue paragraph hover highlight without hiding the paragraph.
-    style.textContent = '[class*="gt-baf"]{background:transparent!important;background-color:transparent!important}';
+    style.textContent =
+      '[class*="gt-baf"]{' +
+      'background:transparent!important;' +
+      'background-color:transparent!important;' +
+      'border-color:transparent!important;' +
+      'border-left-width:0!important;' +
+      'outline:none!important;' +
+      'box-shadow:none!important' +
+      '}';
     (document.head || document.documentElement).appendChild(style);
   }
 
-  function clearGTBackground(el) {
-    // Guard: stop if already cleared to avoid observer feedback loop.
-    if (el.style.getPropertyValue('background-color') === 'transparent') return;
+  function clearGTHighlight(el) {
+    // Guard against observer feedback loop: only our code sets bg to
+    // 'transparent' + border-left-width to '0px', so if both are already
+    // cleared, GT hasn't re-applied anything since we last ran.
+    if (
+      el.style.getPropertyValue('background-color') === 'transparent' &&
+      el.style.getPropertyValue('border-left-width') === '0px'
+    ) return;
+
+    // Inline !important beats GT's own CSS regardless of cascade order.
     el.style.setProperty('background', 'transparent', 'important');
     el.style.setProperty('background-color', 'transparent', 'important');
+    // GT's paragraph hover also draws a left-edge blue bar via border-left.
+    el.style.setProperty('border-left', '0 none transparent', 'important');
+    el.style.setProperty('border-right', '0 none transparent', 'important');
+    el.style.setProperty('border-top', '0 none transparent', 'important');
+    el.style.setProperty('border-bottom', '0 none transparent', 'important');
+    el.style.setProperty('outline', 'none', 'important');
+    el.style.setProperty('box-shadow', 'none', 'important');
   }
 
   function startGTSuppression() {
@@ -82,7 +104,7 @@
     document.querySelectorAll(GT_SEL).forEach(suppressEl);
     // Clear backgrounds on any already-highlighted content elements.
     document.querySelectorAll('[class*="gt-baf"]').forEach(el => {
-      if (!isGTPopupNode(el)) clearGTBackground(el);
+      if (!isGTPopupNode(el)) clearGTHighlight(el);
     });
 
     gtObserver = new MutationObserver(mutations => {
@@ -98,7 +120,7 @@
           } else if (/gt-baf/i.test(target.getAttribute('class') || '')) {
             // Content element received a gt-baf* class or style update — clear the hover highlight.
             // Inline style with !important wins over GT's own CSS regardless of cascade order.
-            clearGTBackground(target);
+            clearGTHighlight(target);
           }
         }
       }

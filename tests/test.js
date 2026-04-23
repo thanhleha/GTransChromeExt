@@ -469,7 +469,7 @@ async function runTests() {
     });
     await page.waitForTimeout(800);
 
-    // Simulate GT hover: add a paragraph and apply a gt-baf* class + blue background like GT does.
+    // Simulate GT hover: apply gt-baf* class + blue bg + blue left-edge border like GT does.
     const result = await page.evaluate(() => {
       const p = document.createElement('p');
       p.id = 'bafTarget';
@@ -479,10 +479,16 @@ async function runTests() {
         setTimeout(() => {
           p.className = 'gt-baf-c';
           p.style.backgroundColor = 'rgb(197, 216, 248)';
+          p.style.borderLeft = '4px solid rgb(66, 133, 244)';
           setTimeout(() => {
-            const bgInline = p.style.getPropertyValue('background-color');
-            const bgComputed = window.getComputedStyle(p).backgroundColor;
-            resolve({ bgInline, bgComputed, stillVisible: !!p.offsetHeight });
+            const cs = window.getComputedStyle(p);
+            resolve({
+              bgInline: p.style.getPropertyValue('background-color'),
+              bgComputed: cs.backgroundColor,
+              borderLeftWidth: cs.borderLeftWidth,
+              borderLeftColor: cs.borderLeftColor,
+              stillVisible: !!p.offsetHeight,
+            });
           }, 120);
         }, 50);
       });
@@ -495,6 +501,10 @@ async function runTests() {
     assert(
       result.bgComputed === 'rgba(0, 0, 0, 0)' || result.bgComputed === 'transparent',
       `Computed background is transparent (got: "${result.bgComputed}")`
+    );
+    assert(
+      result.borderLeftWidth === '0px',
+      `GT left-edge border bar cleared (got width: "${result.borderLeftWidth}")`
     );
     assert(result.stillVisible, 'Paragraph is still visible (not hidden by display:none)');
 
