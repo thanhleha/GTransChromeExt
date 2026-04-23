@@ -260,6 +260,29 @@ async function runTests() {
     failed++;
   }
 
+  // ─── Test 6: Show original bar appears on translated pages ──────────────
+  console.log('\nTest 6: "Show original" bar appears when on a translated page');
+  try {
+    const page = await context.newPage();
+    const translateUrl = 'https://translate.google.com/translate?sl=auto&tl=vi&u=https%3A%2F%2Fexample.com%2F';
+    await page.goto(translateUrl);
+    await page.waitForTimeout(1000);
+
+    const popup = await openPopup(context, extensionId);
+    const bar = await popup.$('#showOriginalBar');
+    const barVisible = bar ? !(await bar.getAttribute('class')).includes('hidden') : false;
+    assert(barVisible, '"Show original" bar is visible on a translated page');
+
+    const btn = await popup.$('#showOriginalBtn');
+    assert(btn !== null, '"Show original" button exists');
+
+    await popup.close();
+    await page.close();
+  } catch (e) {
+    console.log(`  ${FAIL} Test 6 threw: ${e.message}`);
+    failed++;
+  }
+
   // ─── Summary ─────────────────────────────────────────────────────────────
   console.log(`\n${'─'.repeat(50)}`);
   const total = passed + failed;
