@@ -1,26 +1,51 @@
 (function () {
   'use strict';
 
+  // Guard against double-injection. The manifest statically injects this on
+  // .translate.goog pages, and popup.js dynamically injects it on normal
+  // pages via chrome.scripting.executeScript when the user clicks a language.
+  if (window.__qtransLoaded__) return;
+  window.__qtransLoaded__ = true;
+
+  // Two modes share most of the logic here:
+  //   - GT-wrapper mode: page is *.translate.goog. Suppress GT popup/highlight,
+  //     rewrite outgoing links, and power hover/select-for-original against
+  //     URL params.
+  //   - In-place mode: any other page. Wait for a popup message to walk the
+  //     DOM and replace text nodes with translations from translate.googleapis.
+  //     Hover/select-for-original reads the target lang from local state.
+  const IS_GT_WRAPPER = location.hostname.endsWith('.translate.goog');
+
   // ─── Settings ─────────────────────────────────────────────────────────────
   let hoverEnabled = true;
   let selectionEnabled = false;
   let hideGTPopup = true;
+  let autoTranslateLinks;
   let resolvedSourceLang = null;
   let sourceLangPending = null;
+  // Non-null only in in-place mode while a translation is active.
+  let activeTargetLang = null;
 
   function applySettings(s) {
     const mode = s.triggerMode || 'hover';
     hoverEnabled = mode === 'hover';
     selectionEnabled = mode === 'selection';
-    const nextHide = s.hideGTPopup !== false;
-    if (nextHide !== hideGTPopup || !gtObserver) {
-      hideGTPopup = nextHide;
-      hideGTPopup ? startGTSuppression() : stopGTSuppression();
+    if (IS_GT_WRAPPER) {
+      const nextHide = s.hideGTPopup !== false;
+      if (nextHide !== hideGTPopup || !gtObserver) {
+        hideGTPopup = nextHide;
+        hideGTPopup ? startGTSuppression() : stopGTSuppression();
+      }
+      const nextAuto = !!s.autoTranslateLinks;
+      if (nextAuto !== autoTranslateLinks) {
+        autoTranslateLinks = nextAuto;
+        autoTranslateLinks ? stopLinkRewriter() : startLinkRewriter();
+      }
     }
   }
 
   chrome.storage.sync.get(
-    ['triggerMode', 'hideGTPopup'],
+    ['triggerMode', 'hideGTPopup', 'autoTranslateLinks'],
     result => applySettings(result)
   );
 
@@ -28,9 +53,11 @@
     const next = {
       triggerMode: hoverEnabled ? 'hover' : 'selection',
       hideGTPopup,
+      autoTranslateLinks,
     };
     if ('triggerMode' in changes) next.triggerMode = changes.triggerMode.newValue;
     if ('hideGTPopup' in changes) next.hideGTPopup = changes.hideGTPopup.newValue;
+    if ('autoTranslateLinks' in changes) next.autoTranslateLinks = changes.autoTranslateLinks.newValue;
     applySettings(next);
   });
 
@@ -181,11 +208,378 @@
     document.getElementById('__qtrans_css__')?.remove();
   }
 
+  // ─── Link rewriter (escape the translator on click) ───────────────────────
+  // On *.translate.goog pages, Google rewrites every outgoing link so the
+  // next page stays inside the translator. When autoTranslateLinks is off we
+  // rewrite those links back to their original URLs so clicking a link (or
+  // middle-clicking, or copying the link) takes the user to the real page.
+
+  let linkObserver = null;
+
+  // Decode a Google-translated hostname.
+  //   huggingface-co.translate.goog      → huggingface.co
+  //   foo--bar-example-com.translate.goog → foo-bar.example.com
+  // Google's encoding replaces '.' with '-' and '-' with '--'; reverse with
+  // a placeholder so the two substitutions don't collide.
+  function decodeGTHostname(host) {
+    const SUFFIX = '.translate.goog';
+    if (!host.endsWith(SUFFIX)) return null;
+    const prefix = host.slice(0, -SUFFIX.length);
+    if (!prefix) return null;
+    return prefix.replace(/--/g, '\x00').replace(/-/g, '.').replace(/\x00/g, '-');
+  }
+
+  function toOriginalUrl(href) {
+    try {
+      const u = new URL(href, location.href);
+      if (!u.hostname.endsWith('.translate.goog')) return null;
+      const orig = decodeGTHostname(u.hostname);
+      if (!orig) return null;
+      u.hostname = orig;
+      u.protocol = 'https:';
+      // Google's translator params leak into the URL — strip them.
+      for (const k of [...u.searchParams.keys()]) {
+        if (k.startsWith('_x_tr_')) u.searchParams.delete(k);
+      }
+      return u.toString();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function rewriteAnchor(a) {
+    if (!a || !a.getAttribute) return;
+    const orig = toOriginalUrl(a.href);
+    if (!orig) return;
+    if (a.getAttribute('href') !== orig) {
+      // Stash the GT-wrapped form so we can restore it if the user flips
+      // the setting on mid-page without reloading.
+      if (!a.dataset.qtransGtHref) a.dataset.qtransGtHref = a.getAttribute('href');
+      a.setAttribute('href', orig);
+    }
+  }
+
+  function rewriteAllAnchors(root) {
+    root.querySelectorAll?.('a[href]').forEach(rewriteAnchor);
+  }
+
+  function restoreAllAnchors() {
+    document.querySelectorAll('a[data-qtrans-gt-href]').forEach(a => {
+      const stored = a.dataset.qtransGtHref;
+      if (stored) {
+        a.setAttribute('href', stored);
+        delete a.dataset.qtransGtHref;
+      }
+    });
+  }
+
+  function startLinkRewriter() {
+    if (linkObserver) return;
+    rewriteAllAnchors(document);
+    linkObserver = new MutationObserver(muts => {
+      for (const m of muts) {
+        for (const n of m.addedNodes) {
+          if (n.nodeType !== Node.ELEMENT_NODE) continue;
+          if (n.tagName === 'A') rewriteAnchor(n);
+          n.querySelectorAll?.('a[href]').forEach(rewriteAnchor);
+        }
+        if (m.type === 'attributes' && m.target.tagName === 'A') {
+          rewriteAnchor(m.target);
+        }
+      }
+    });
+    linkObserver.observe(document.documentElement, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['href'],
+    });
+  }
+
+  function stopLinkRewriter() {
+    linkObserver?.disconnect();
+    linkObserver = null;
+    restoreAllAnchors();
+  }
+
+  // ─── In-place DOM translator ──────────────────────────────────────────────
+  // Walks the page's text nodes, batches them, calls the public
+  // translate_a/single endpoint, and replaces nodeValue in place. A
+  // MutationObserver keeps the translation consistent as the page adds new
+  // content (infinite scroll, SPA navigation, etc.). The original text for
+  // each touched node is kept in the record so we can restore it later.
+
+  // Block-level tags whose text should never be touched.
+  const TRANSLATE_SKIP_TAGS = new Set([
+    'SCRIPT', 'STYLE', 'NOSCRIPT', 'IFRAME', 'OBJECT', 'EMBED',
+    'CODE', 'PRE', 'KBD', 'SAMP', 'VAR',
+    'TEXTAREA', 'INPUT', 'SELECT', 'OPTION',
+  ]);
+
+  const translatedNodes = [];  // [{ node, originalText, isTitle }]
+  let translatorObserver = null;
+  let pendingNewNodes = [];
+  let pendingFlushTimer = null;
+
+  function shouldSkipTextNode(node) {
+    if (!node || node.nodeType !== Node.TEXT_NODE) return true;
+    const v = node.nodeValue;
+    if (!v) return true;
+    // Pure whitespace or no word characters at all — nothing to translate.
+    if (!/\S/.test(v)) return true;
+    if (!/\p{L}/u.test(v)) return true;
+    let p = node.parentElement;
+    while (p) {
+      if (TRANSLATE_SKIP_TAGS.has(p.tagName)) return true;
+      if (p.getAttribute?.('translate') === 'no') return true;
+      if (p.classList?.contains('notranslate')) return true;
+      if (p.id && p.id.startsWith('__qtrans_')) return true;
+      if (p.getAttribute?.('contenteditable') === 'true') return true;
+      p = p.parentElement;
+    }
+    return false;
+  }
+
+  function collectTextNodes(root) {
+    if (!root) return [];
+    const nodes = [];
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+      acceptNode(n) {
+        return shouldSkipTextNode(n) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT;
+      },
+    });
+    let n;
+    while ((n = walker.nextNode())) nodes.push(n);
+    return nodes;
+  }
+
+  async function translateOneApi(text, targetLang) {
+    try {
+      const url = 'https://translate.googleapis.com/translate_a/single' +
+        '?client=gtx&sl=auto&dt=t&tl=' + encodeURIComponent(targetLang) +
+        '&q=' + encodeURIComponent(text);
+      const resp = await fetch(url);
+      if (!resp.ok) return text;
+      const data = await resp.json();
+      const segs = data?.[0] || [];
+      const out = segs.map(s => s?.[0] || '').join('');
+      return out || text;
+    } catch (_) {
+      return text;
+    }
+  }
+
+  // Batch multiple strings into a single request using `\n\n` as a boundary
+  // marker. Google preserves paragraph breaks, so the split round-trips in
+  // the common case. If the boundary count doesn't match, fall back to one
+  // request per string for that batch.
+  async function translateBatchApi(texts, targetLang) {
+    if (texts.length === 1) {
+      return [await translateOneApi(texts[0], targetLang)];
+    }
+    try {
+      const joined = texts.join('\n\n');
+      const url = 'https://translate.googleapis.com/translate_a/single' +
+        '?client=gtx&sl=auto&dt=t&tl=' + encodeURIComponent(targetLang) +
+        '&q=' + encodeURIComponent(joined);
+      const resp = await fetch(url);
+      if (!resp.ok) throw new Error('http ' + resp.status);
+      const data = await resp.json();
+      const segs = data?.[0] || [];
+      const out = segs.map(s => s?.[0] || '').join('');
+      const parts = out.split(/\n\n+/);
+      if (parts.length === texts.length) return parts;
+    } catch (_) {
+      // fall through to per-item
+    }
+    return Promise.all(texts.map(t => translateOneApi(t, targetLang)));
+  }
+
+  // Run `fn` over `items` with at most `concurrency` in flight at a time.
+  async function runWithConcurrency(items, concurrency, fn) {
+    const state = { i: 0 };
+    async function worker() {
+      while (state.i < items.length) {
+        const idx = state.i++;
+        try { await fn(items[idx]); } catch (_) {}
+      }
+    }
+    const n = Math.min(concurrency, items.length);
+    const workers = Array.from({ length: n }, () => worker());
+    await Promise.all(workers);
+  }
+
+  async function translateNodes(nodes, targetLang) {
+    if (!nodes.length) return;
+    const BATCH = 20;
+    const batches = [];
+    for (let i = 0; i < nodes.length; i += BATCH) {
+      batches.push(nodes.slice(i, i + BATCH));
+    }
+    await runWithConcurrency(batches, 4, async batch => {
+      const texts = batch.map(n => n.nodeValue);
+      const translated = await translateBatchApi(texts, targetLang);
+      for (let i = 0; i < batch.length; i++) {
+        const node = batch[i];
+        const out = translated[i];
+        if (!node.isConnected) continue;
+        if (!node.__qtrans_orig) {
+          node.__qtrans_orig = node.nodeValue;
+          translatedNodes.push({ node, originalText: node.nodeValue });
+        }
+        if (out && out !== node.nodeValue) node.nodeValue = out;
+      }
+    });
+  }
+
+  async function translateInPlace(targetLang) {
+    if (!targetLang) return { ok: false, error: 'no target lang' };
+    // Already translated to a different lang — revert first so we start from
+    // the true original text rather than translating-of-translation.
+    if (activeTargetLang && activeTargetLang !== targetLang) {
+      restoreOriginal();
+    }
+
+    activeTargetLang = targetLang;
+    markPageTranslated(targetLang);
+
+    // Filter out nodes we've already translated — a second translateInPlace
+    // call (e.g., tabs.onUpdated firing twice for one navigation) otherwise
+    // wastes an API round-trip on every node.
+    const nodes = collectTextNodes(document.body).filter(n => !n.__qtrans_orig);
+    await translateNodes(nodes, targetLang);
+
+    // Translate the document title — it's user-visible in the tab.
+    if (document.title && !titleRecorded()) {
+      const orig = document.title;
+      try {
+        const t = await translateOneApi(orig, targetLang);
+        if (t && t !== orig) {
+          translatedNodes.push({ node: null, originalText: orig, isTitle: true });
+          document.title = t;
+        }
+      } catch (_) {}
+    }
+
+    startTranslatorObserver(targetLang);
+
+    // Tell background to remember this tab's target lang so it can re-apply
+    // the translation after same-tab navigations (when autoTranslateLinks
+    // is on).
+    try {
+      chrome.runtime.sendMessage({ type: 'qtrans/set-tab-lang', targetLang });
+    } catch (_) {}
+
+    return { ok: true, count: translatedNodes.length };
+  }
+
+  function titleRecorded() {
+    return translatedNodes.some(r => r.isTitle);
+  }
+
+  function restoreOriginal() {
+    stopTranslatorObserver();
+    for (const rec of translatedNodes) {
+      if (rec.isTitle) {
+        document.title = rec.originalText;
+      } else if (rec.node && rec.node.isConnected) {
+        rec.node.nodeValue = rec.originalText;
+        delete rec.node.__qtrans_orig;
+      }
+    }
+    translatedNodes.length = 0;
+    activeTargetLang = null;
+    document.getElementById('__qtrans_meta__')?.remove();
+
+    // Stop background from auto-translating follow-on pages in this tab.
+    try {
+      chrome.runtime.sendMessage({ type: 'qtrans/clear-tab-lang' });
+    } catch (_) {}
+  }
+
+  // Sentinel the popup reads (via chrome.scripting.executeScript) to decide
+  // whether to show the "Show original page" bar on normal (non-wrapper)
+  // pages.
+  function markPageTranslated(targetLang) {
+    let meta = document.getElementById('__qtrans_meta__');
+    if (!meta) {
+      meta = document.createElement('meta');
+      meta.id = '__qtrans_meta__';
+      meta.name = 'qtrans-translation';
+      (document.head || document.documentElement).appendChild(meta);
+    }
+    meta.content = targetLang;
+  }
+
+  function flushPendingNewNodes(targetLang) {
+    const nodes = pendingNewNodes.filter(n => n.isConnected && !n.__qtrans_orig);
+    pendingNewNodes = [];
+    pendingFlushTimer = null;
+    if (nodes.length) translateNodes(nodes, targetLang).catch(() => {});
+  }
+
+  function startTranslatorObserver(targetLang) {
+    stopTranslatorObserver();
+    translatorObserver = new MutationObserver(muts => {
+      for (const m of muts) {
+        for (const n of m.addedNodes) {
+          if (n.nodeType === Node.TEXT_NODE) {
+            if (!shouldSkipTextNode(n) && !n.__qtrans_orig) pendingNewNodes.push(n);
+          } else if (n.nodeType === Node.ELEMENT_NODE) {
+            for (const t of collectTextNodes(n)) {
+              if (!t.__qtrans_orig) pendingNewNodes.push(t);
+            }
+          }
+        }
+      }
+      if (pendingNewNodes.length && !pendingFlushTimer) {
+        // Small debounce coalesces bursty mutations (SPA re-renders).
+        pendingFlushTimer = setTimeout(() => flushPendingNewNodes(targetLang), 150);
+      }
+    });
+    translatorObserver.observe(document.body, { childList: true, subtree: true });
+  }
+
+  function stopTranslatorObserver() {
+    translatorObserver?.disconnect();
+    translatorObserver = null;
+    clearTimeout(pendingFlushTimer);
+    pendingFlushTimer = null;
+    pendingNewNodes = [];
+  }
+
+  // ─── Message listener (popup → content script) ────────────────────────────
+  chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+    if (!msg || typeof msg !== 'object') return;
+    if (msg.type === 'qtrans/translate-in-place') {
+      translateInPlace(msg.targetLang).then(
+        r => sendResponse(r || { ok: true }),
+        err => sendResponse({ ok: false, error: err?.message || String(err) })
+      );
+      return true; // async response
+    }
+    if (msg.type === 'qtrans/restore-original') {
+      restoreOriginal();
+      sendResponse({ ok: true });
+      return false;
+    }
+    if (msg.type === 'qtrans/state') {
+      sendResponse({ translated: !!activeTargetLang, targetLang: activeTargetLang });
+      return false;
+    }
+  });
+
   // ─── Language detection ───────────────────────────────────────────────────
 
   function getPageLangs() {
-    const p = new URLSearchParams(window.location.search);
-    return { sourceLang: p.get('_x_tr_sl') || 'auto', targetLang: p.get('_x_tr_tl') || 'auto' };
+    if (IS_GT_WRAPPER) {
+      const p = new URLSearchParams(window.location.search);
+      return { sourceLang: p.get('_x_tr_sl') || 'auto', targetLang: p.get('_x_tr_tl') || 'auto' };
+    }
+    if (activeTargetLang) {
+      return { sourceLang: 'auto', targetLang: activeTargetLang };
+    }
+    return { sourceLang: 'auto', targetLang: 'auto' };
   }
 
   async function resolveSourceLanguage(targetLang) {

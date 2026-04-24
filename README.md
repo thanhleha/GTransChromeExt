@@ -1,10 +1,11 @@
 # Quick Webpage Translate — Chrome Extension
 
-A Chrome extension (Manifest V3) that adds one-click translation to your **3 most recently used languages**, eliminating the need to navigate Google Translate's full language list every time.
+A Chrome extension (Manifest V3) that translates webpages **in place** with one click and
+gives you fast access to the languages you actually use. The URL stays
+original, every link stays real, and your browser history and bookmarks
+keep pointing at the true page — not at a Google-hosted proxy.
 
 ## Why this extension, not Chrome's built-in Web Page Translate?
-
-Chrome has a built-in translation feature, so this is a fair question.
 
 **Chrome's built-in translate** works well *if* you always translate to the same language (your browser's default). But it falls short for multilingual users:
 
@@ -21,34 +22,56 @@ Chrome has a built-in translation feature, so this is a fair question.
 - Learns your pattern — the list reorders itself automatically as you use it.
 - Pin permanent favorites — languages you always need stay pinned above the recents.
 - Consistent "Show original" button — always accessible from the toolbar, regardless of what the page itself renders.
-- Works on any page — no reliance on Chrome's auto-detect heuristics; you choose when to translate and to what language.
+- Translates in place — the URL, links on the page, bookmarks, and back-button behavior all stay native. No redirection through a `*.translate.goog` subdomain.
 - Hover or select a word to see the original — on translated pages, choose a trigger mode (Hover for 1 s, or Select text) and a small tooltip shows the original word in the source language.
-- Clean reading experience — Google Translate's intrusive "Original text" popup and its blue paragraph-wide hover highlight are suppressed by default (toggle in the popup if you want them back).
+- Clean reading experience — no top bar injected by Google, no intrusive "Original text" popup, no paragraph-wide blue hover highlight.
 
 If you only ever translate everything to one language and Chrome's banner works reliably for you, the built-in is fine. If you work across multiple languages daily, this extension removes the friction.
 
 ## Features
 
-- **3 recent-language buttons** — instantly retranslate with your most-used languages, reordered automatically
-- **Pinned favorites** — star any language to keep it permanently above the recent list
-- **Full language search** — searchable list of ~100 languages
-- **Show original** — one-click button to return to the untranslated page, always visible from the toolbar
-- **Reveal original word/phrase** — on translated pages, pick a trigger in the popup (mutually exclusive): **Hover** a word for 1 s, or **Select** text with mouse/keyboard; a small tooltip shows the original text in the source language
-- **Suppress Google Translate's UI clutter** — hides the "Original text" bubble and the blue paragraph-wide hover highlight that GT injects on `.translate.goog` pages; toggle in the popup
-- **No double-wrapping** — detects when you're already on a translated page and re-wraps the original URL cleanly
-- **Handles modern Google Translate URLs** — works with both `translate.google.com` and `.translate.goog` domain formats
-- **No API key needed** — uses Google Translate's public URL interface
-- **Synced across devices** — recents, favorites, and settings stored via `chrome.storage.sync`
+- **In-place translation by default** — walks the page's text nodes and replaces them via Google Translate's public API, so the URL stays `arxiv.org` (not `arxiv-org.translate.goog`), link targets stay real, and Back/Forward/Bookmarks behave naturally.
+- **3 recent-language buttons** — instantly retranslate with your most-used languages, reordered automatically.
+- **Pinned favorites** — star any language to keep it permanently above the recent list.
+- **Full language search** — searchable list of ~100 languages.
+- **Show original** — one-click button to restore every text node on the page to its original text, no navigation required.
+- **Reveal original word/phrase** — on a translated page, pick a trigger in the popup (mutually exclusive): **Hover** a word for 1 s, or **Select** text with mouse/keyboard; a small tooltip shows the original text in the source language.
+- **Auto-translate followed links** — optional toggle: when you click a link on a translated page, the new page is translated into the same language automatically. Hover/select works on the follow-on page too.
+- **Google Translate wrapper fallback** — optional toggle: if a specific page renders poorly in in-place mode, flip the toggle and the extension uses Google's `translate.google.com/translate?u=…` wrapper instead (the legacy behavior). The wrapper mode also suppresses GT's intrusive popup and blue paragraph hover-highlight, and optionally rewrites GT-wrapped anchor hrefs back to originals.
+- **Translates dynamic content** — a MutationObserver keeps translating text added by SPAs and infinite scroll.
+- **No API key needed** — uses Google Translate's public endpoints.
+- **Synced across devices** — recents, favorites, and settings stored via `chrome.storage.sync`.
 
 ## How it works
 
-Clicking a language button redirects the current tab to:
+### Default: in-place translation
+
+When you click a language button, the extension injects `content.js` into the active tab (via `chrome.scripting.executeScript`) and sends it the target language. `content.js` then:
+
+1. Walks the page's text nodes (skipping `<script>`, `<style>`, `<code>`, `<pre>`, `<input>`, anything marked `translate="no"` or `.notranslate`, and our own injected UI).
+2. Batches ~20 text nodes per request (joined with `\n\n`), calls `https://translate.googleapis.com/translate_a/single` with `sl=auto&tl=<lang>`, up to 4 batches in flight at a time.
+3. Replaces each node's `nodeValue` with the translated text, stashing the original so "Show original" can revert.
+4. Translates `document.title` so the browser tab label is also localized.
+5. Starts a `MutationObserver` so text added later (SPA re-renders, infinite scroll) is translated too.
+6. Tells the background service worker the tab's target language, so — if you've enabled **Auto-translate followed links** — clicking an internal link auto-translates the destination page into the same language.
+
+The URL bar never changes. Link `href` attributes are never touched. A hidden `<meta name="qtrans-translation">` sentinel is added so the popup can detect the translated state and show the "Show original" bar.
+
+### Fallback: Google Translate wrapper
+
+If you turn on **Use Google Translate wrapper** in the popup, clicking a language button falls back to the original behavior — navigating the tab to:
 
 ```
 https://translate.google.com/translate?sl=auto&tl={lang}&u={currentUrl}
 ```
 
-If the current page is already a Google Translate page, the extension extracts the original URL first to avoid double-wrapping.
+This is the same approach the extension used prior to v1.0.0. The tab ends up at `{host-with-dashes}.translate.goog/...`. Use this when a page renders poorly under in-place translation (for example, heavy client-side frameworks that re-key elements on every render).
+
+On a `*.translate.goog` page, the extension still does useful work:
+
+- Suppresses Google Translate's "Original text" popup and the blue paragraph-wide hover highlight that GT injects on hover.
+- Hover/select-for-original continues to work, rounding-tripping through `translate.googleapis.com`.
+- The optional **Auto-translate followed links** toggle — when **off** (default), anchor `href` attributes are rewritten to their real URLs, so middle-click, copy-link-address, and the status bar all show the real destination and clicking escapes the wrapper; when **on**, links are left as GT-wrapped so follow-on pages stay translated.
 
 ## Installation (Developer Mode)
 
@@ -74,19 +97,26 @@ When you pull new code or edit any file locally, Chrome won't pick up the change
 ```
 GTransChromeExt/
 ├── manifest.json          # MV3 manifest
-├── background.js          # Service worker — initializes defaults on install
-├── content.js             # Injected on .translate.goog pages: hover/select tooltip, GT UI suppression
+├── background.js          # Service worker — defaults + per-tab target-lang tracking + auto-translate on navigation
+├── content.js             # Dual-mode: in-place translator (any page, injected on demand) +
+│                          # GT-wrapper helper (statically injected on *.translate.goog)
 ├── languages.js           # Full language list (~100 languages)
 ├── popup.html             # Extension popup UI
 ├── popup.css              # Google-style popup styling
 ├── popup.js               # Popup logic (recent langs, favorites, translate, search, settings)
 ├── resize_icon.js         # Crops + masks + resamples icons/source_1024.png → the 3 sizes
+├── build_zip.js           # Stages the runtime files and zips them for Chrome Web Store upload
+├── capture_screenshots.js # Generates the 1280×800 marketing shot for the store listing
 ├── generate_icons.py      # (legacy) pure-Python procedural icon generator
 ├── icons/
 │   ├── source_1024.png    # Hand-designed (AI-generated) source at 1024×1024
 │   ├── icon16.png
 │   ├── icon48.png
 │   └── icon128.png
+├── store_assets/
+│   ├── STORE_LISTING.md   # Copy-paste content for the Chrome Web Store dashboard
+│   ├── PRIVACY_POLICY.md  # Required by the store; host as a Gist or GH Pages URL
+│   └── screenshot_popup.png
 └── tests/
     ├── package.json
     └── test.js            # Playwright end-to-end test suite
@@ -104,20 +134,7 @@ npm install
 node test.js
 ```
 
-### What the tests cover
-
-1. Popup renders 3 recent language buttons
-2. Language list is searchable and filterable
-3. Clicking a recent button navigates to Google Translate
-4. Already-translated pages are re-translated without double-wrapping
-5. Choosing a new language promotes it to the top of the recent list
-6. "Show original" bar appears when on a translated page
-7. Pin/unpin a language adds and removes it from the favorites section
-8. Hover over a word on a translated page shows tooltip + highlight above the paragraph
-9. Google Translate's injected popup elements are suppressed
-9b. GT paragraph hover decoration (background + left-edge border) is cleared inline
-9c. GT's signature light-blue background is cleared via color detection even without a GT class
-10. Select-text mode shows tooltip for selected text after 1 s of stable selection
+> Note on v1.0.0: the existing tests were written against the pre-v1 wrapper-navigation behavior. They exercise the fallback path (GT-wrapper mode) and still work when the test harness pre-seeds `useWrapperFallback: true` in `chrome.storage.sync`. Dedicated tests for the new in-place translator are a TODO.
 
 ## Regenerating Icons
 
@@ -142,14 +159,18 @@ node test.js
 
 | Permission | Reason |
 |---|---|
-| `storage` | Save and sync recent languages, favorites, and settings across devices |
-| `tabs` | Read the current tab's URL to build the translate link |
-| `translate.googleapis.com` (host) | Reverse-translate hovered words to their original form on translated pages |
+| `storage` | Save and sync recent languages, favorites, and UI settings; per-tab target language is kept in `chrome.storage.session` for auto-translate-on-navigation. |
+| `tabs` | Read the active tab's URL (to detect wrapper / in-place state) and react to navigation events to re-apply translation in the same tab. |
+| `scripting` | Inject `content.js` into the active tab on demand when the user clicks a language (in-place mode) or when the tab navigates with auto-translate on. |
+| `activeTab` | Grants temporary access to the current tab when the popup is opened, so `scripting.executeScript` can run without a broad `<all_urls>` host permission. |
+| `https://translate.googleapis.com/*` (host) | Fetches translations (whole-page text and reverse-translations for hover/select). |
 
 ## Potential Future Improvements
 
 - Right-click context menu → Quick Webpage Translate → [lang]
 - Keyboard shortcuts for the 3 recent language buttons
+- Cancellation of in-flight translation requests when the user rapidly switches target language
+- Translate element attributes (`alt`, `title`, `placeholder`) in addition to text nodes
 
 ---
 

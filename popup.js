@@ -83,32 +83,78 @@ function isTranslatableUrl(url) {
   return true;
 }
 
+async function getUseWrapperFallback() {
+  return new Promise(resolve => {
+    chrome.storage.sync.get(['useWrapperFallback'], result => {
+      resolve(result.useWrapperFallback === true);
+    });
+  });
+}
+
+async function translateInPlace(tab, langCode) {
+  // Inject content.js on demand — the manifest only statically injects it on
+  // .translate.goog pages. The script guards against double-load.
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      files: ['content.js'],
+    });
+  } catch (e) {
+    return { ok: false, error: e?.message || String(e) };
+  }
+  try {
+    return await chrome.tabs.sendMessage(tab.id, {
+      type: 'qtrans/translate-in-place',
+      targetLang: langCode,
+    });
+  } catch (e) {
+    return { ok: false, error: e?.message || String(e) };
+  }
+}
+
 async function translatePage(langCode) {
   const tab = await getActiveTab();
 
-  let translateUrl;
+  let parsed;
   try {
-    const parsed = new URL(tab.url);
-    if (parsed.hostname.endsWith('.translate.goog')) {
-      // Modern Google Translate page — swap language in-place instead of re-wrapping
-      parsed.searchParams.set('_x_tr_sl', 'auto');
-      parsed.searchParams.set('_x_tr_tl', langCode);
-      translateUrl = parsed.toString();
-    } else {
-      const originalUrl = getOriginalUrl(tab.url);
-      if (!isTranslatableUrl(originalUrl)) {
-        showError();
-        return;
-      }
-      translateUrl = `https://translate.google.com/translate?sl=auto&tl=${langCode}&u=${encodeURIComponent(originalUrl)}`;
-    }
+    parsed = new URL(tab.url);
   } catch (e) {
     showError();
     return;
   }
 
+  // Case 1: already on a .translate.goog wrapper page — swap target language
+  // in place. This works regardless of the fallback toggle, because the user
+  // is already inside the wrapper and re-translating is the natural action.
+  if (parsed.hostname.endsWith('.translate.goog')) {
+    parsed.searchParams.set('_x_tr_sl', 'auto');
+    parsed.searchParams.set('_x_tr_tl', langCode);
+    await saveRecentLanguage(langCode);
+    chrome.tabs.update(tab.id, { url: parsed.toString() });
+    window.close();
+    return;
+  }
+
+  const originalUrl = getOriginalUrl(tab.url);
+  if (!isTranslatableUrl(originalUrl)) {
+    showError();
+    return;
+  }
+
+  const useWrapper = await getUseWrapperFallback();
+
+  // Case 2: fallback toggle on — navigate to the wrapper (legacy behavior).
+  if (useWrapper) {
+    const translateUrl = `https://translate.google.com/translate?sl=auto&tl=${langCode}&u=${encodeURIComponent(originalUrl)}`;
+    await saveRecentLanguage(langCode);
+    chrome.tabs.update(tab.id, { url: translateUrl });
+    window.close();
+    return;
+  }
+
+  // Case 3: in-place translation. Inject content.js and message it.
   await saveRecentLanguage(langCode);
-  chrome.tabs.update(tab.id, { url: translateUrl });
+  translateInPlace(tab, langCode);  // fire-and-forget; popup closes immediately
   window.close();
 }
 
@@ -213,15 +259,36 @@ function isTranslatedPage(url) {
   }
 }
 
+async function isInPlaceTranslated(tab) {
+  try {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: () => !!document.querySelector('meta[name="qtrans-translation"]'),
+    });
+    return !!results?.[0]?.result;
+  } catch (e) {
+    return false;
+  }
+}
+
 async function showOriginalPage(tab) {
   try {
-    const { hostname } = new URL(tab.url);
-    if (hostname.endsWith('.translate.goog')) {
+    const parsed = new URL(tab.url);
+    if (parsed.hostname.endsWith('.translate.goog')) {
       chrome.tabs.goBack(tab.id);
-    } else {
-      const origUrl = new URL(tab.url).searchParams.get('u');
-      if (origUrl) chrome.tabs.update(tab.id, { url: origUrl });
+      window.close();
+      return;
     }
+    if (parsed.href.includes('translate.google.com/translate')) {
+      const origUrl = parsed.searchParams.get('u');
+      if (origUrl) chrome.tabs.update(tab.id, { url: origUrl });
+      window.close();
+      return;
+    }
+    // In-place translated page — restore text nodes without navigating.
+    try {
+      await chrome.tabs.sendMessage(tab.id, { type: 'qtrans/restore-original' });
+    } catch (e) {}
   } catch (e) {}
   window.close();
 }
@@ -235,7 +302,8 @@ async function init() {
     return;
   }
 
-  if (isTranslatedPage(tab.url)) {
+  const showBar = isTranslatedPage(tab.url) || await isInPlaceTranslated(tab);
+  if (showBar) {
     const bar = document.getElementById('showOriginalBar');
     bar.classList.remove('hidden');
     document.getElementById('showOriginalBtn').addEventListener('click', () => showOriginalPage(tab));
@@ -253,21 +321,32 @@ async function init() {
   });
   searchInput.focus();
 
-  chrome.storage.sync.get(['hideGTPopup', 'triggerMode'], result => {
-    const hideEl = document.getElementById('hideGTPopupToggle');
-    hideEl.checked = result.hideGTPopup !== false;
-    hideEl.addEventListener('change', () => chrome.storage.sync.set({ hideGTPopup: hideEl.checked }));
+  chrome.storage.sync.get(
+    ['hideGTPopup', 'triggerMode', 'autoTranslateLinks', 'useWrapperFallback'],
+    result => {
+      const hideEl = document.getElementById('hideGTPopupToggle');
+      hideEl.checked = result.hideGTPopup !== false;
+      hideEl.addEventListener('change', () => chrome.storage.sync.set({ hideGTPopup: hideEl.checked }));
 
-    const mode = result.triggerMode || 'hover';
-    document.querySelectorAll('#triggerModeCtrl .seg-btn').forEach(btn => {
-      btn.classList.toggle('active', btn.dataset.mode === mode);
-      btn.addEventListener('click', () => {
-        document.querySelectorAll('#triggerModeCtrl .seg-btn').forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
-        chrome.storage.sync.set({ triggerMode: btn.dataset.mode });
+      const autoEl = document.getElementById('autoTranslateLinksToggle');
+      autoEl.checked = result.autoTranslateLinks === true;
+      autoEl.addEventListener('change', () => chrome.storage.sync.set({ autoTranslateLinks: autoEl.checked }));
+
+      const wrapEl = document.getElementById('useWrapperFallbackToggle');
+      wrapEl.checked = result.useWrapperFallback === true;
+      wrapEl.addEventListener('change', () => chrome.storage.sync.set({ useWrapperFallback: wrapEl.checked }));
+
+      const mode = result.triggerMode || 'hover';
+      document.querySelectorAll('#triggerModeCtrl .seg-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.mode === mode);
+        btn.addEventListener('click', () => {
+          document.querySelectorAll('#triggerModeCtrl .seg-btn').forEach(b => b.classList.remove('active'));
+          btn.classList.add('active');
+          chrome.storage.sync.set({ triggerMode: btn.dataset.mode });
+        });
       });
-    });
-  });
+    }
+  );
 }
 
 document.addEventListener('DOMContentLoaded', init);

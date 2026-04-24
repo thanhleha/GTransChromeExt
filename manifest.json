@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
   "name": "Quick Webpage Translate",
-  "version": "0.2.1",
-  "description": "One-click translation to your recent & pinned languages. Hover or select a word on translated pages to reveal the original.",
-  "permissions": ["storage", "tabs"],
+  "version": "1.0.0",
+  "description": "One-click in-place translation — URL and links stay original. Recent & pinned languages, plus hover/select to reveal the source.",
+  "permissions": ["storage", "tabs", "scripting", "activeTab"],
   "host_permissions": ["https://translate.googleapis.com/*"],
   "content_scripts": [
     {
